@@ -199,12 +199,16 @@ def turn_on(logger, timer_override=None):
         )
         state = status_check.stdout.strip()
 
-        if state == "active":
+        if state == "active" and (timer_override is None or int(timer_override) != 0):
             logger.info(f"{service} is running ✅")
             logger.info(f"Remote Management Access will be disabled automatically in {timer_override} hours")
             disable_in_x_hours(logger, timer_override)
+        elif state == "active" and (int(timer_override) == 0):
+            logger.info(f"{service} is running ✅")
+            logger.info(f"Remote Management will run untill it is disabled with with --off")
         else:
-            logger.warning(f"{service} is NOT running (state={state})")
+            logger.warning(f"{service} is NOT running or running without timer (state={state}, timer_override={timer_override})")
+
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error managing {service}: {e.stderr.strip()}")
@@ -315,31 +319,34 @@ def install_sw(logger):
         logger.error(f"Failed to install {src} to {dst_dir}: {e}")
 
 def disable_in_x_hours(logger, timer_override):
-    """
+    """ 
     Schedule /usr/local/sbin/mgmt-access.py --off to run once after timer_override hours.
-    Uses the 'at' command.
-    """
+    Uses the 'at' command. If timer_override=0, do not schedule and log that it must be stopped manually.
+    """     
     try:
-        # Ensure timer_override is a positive integer
+        # Ensure timer_override is an integer
         hours = int(timer_override)
-        if hours <= 0:
-            logger.error(f"Invalid timer_override: {timer_override}. Must be > 0.")
-            return
 
+        if hours == 0:
+            logger.info("Remote management will run until it is manually stopped --off (no auto-disable scheduled).")
+            return
+        elif hours < 0:
+            logger.error(f"Invalid timer_override: {timer_override}. Must be >= 0.")
+            return
+        
         cmd = f"/usr/local/sbin/mgmt-access.py --off"
         at_cmd = f'echo "{cmd}" | at now + {hours} hours'
-
+            
         logger.debug(f"Scheduling command: {cmd} to run in {hours} hour(s) using 'at'")
         result = subprocess.run(at_cmd, shell=True, check=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
+        
         logger.debug(f"'at' scheduled successfully: {result.stdout.strip()}")
-
+            
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to schedule with 'at': {e.stderr.strip()}")
     except ValueError:
         logger.error(f"timer_override must be an integer (got {timer_override})")
-
 
 
 def timer_override(value):
@@ -962,7 +969,7 @@ def main():
     #parser.add_argument("--timer-override", type=str, metavar="VALUE", help="Override management access timer with specified VALUE")
     # 1) set the timer-override int if specified  
     #parser.add_argument( "--timer-override", default=24, type=int, metavar="HOURS", help="Override management access timer in hours (default=24)")
-    parser.add_argument( "--timer-override", type=int, default=None, help="Override management access timer in hours (default=24, requires --on)")
+    parser.add_argument( "--timer-override", type=int, default=None, help="Override management access timer in hours (default=24, 0=leave_running, option requires --on)")
     parser.add_argument("--install-server", action="store_true", help="Install server components")
     parser.add_argument("--install-client", action="store_true", help="Install client components")
     parser.add_argument("--add-ops-user", action="store_true", help="create an ops user")

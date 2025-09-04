@@ -22,11 +22,14 @@ python3 remote-mgmt-tsa.py --add-ops-user
 #start the remote mamagement service for 24 hours, usually ran by the ops user
 python3 remote-mgmt-tsa.py --on 
 
-#stop the remote mamagement service, usually ran by the ops user
-python3 remote-mgmt-tsa.py --off
-
 #start the remote management service for the specified number of hours 
 python3 remote-mgmt-tsa.py --on --timer-override 99 
+
+#start the remote management service, run untill manually stopped with --off 
+python3 remote-mgmt-tsa.py --on --timer-override 0 
+
+#stop the remote mamagement service, usually ran by the ops user
+python3 remote-mgmt-tsa.py --off
 
 #remove the ops user
 python3 remote-mgmt-tsa.py --remove-ops-user
