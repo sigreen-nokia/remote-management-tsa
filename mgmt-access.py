@@ -16,12 +16,13 @@ import shutil
 from pathlib import Path
 import re
 import datetime
+import getpass
 
 def setup_logger(level=logging.INFO):
     # Don’t let logging print handler tracebacks on emit errors
     logging.raiseExceptions = False
 
-    logger = logging.getLogger("tweedle.py")  # or "mgmt-access"
+    logger = logging.getLogger("mgmt-access.py")  
     logger.setLevel(level)
     logger.propagate = False  # keep messages from bubbling to root
 
@@ -34,7 +35,7 @@ def setup_logger(level=logging.INFO):
     console = logging.StreamHandler(stream=sys.stdout)
     console.setLevel(level)
     console.setFormatter(logging.Formatter(
-        "%(asctime)s %(name)s [%(levelname)s]: pid=%(process)d %(message)s",
+        "%(asctime)s %(name)s [%(levelname)s]: %(message)s",
         datefmt="%b %d %H:%M:%S"
     ))
     logger.addHandler(console)
@@ -172,6 +173,8 @@ def turn_on(logger, timer_override=None):
     """
     service = "reverse-ssh.service"
 
+    logger.info(f"Enabling the Remote Access Management Service...")
+    logger.debug(f"timer_override is set to {timer_override}...")
     logger.debug(f"Checking for {service}...")
 
     try:
@@ -198,6 +201,8 @@ def turn_on(logger, timer_override=None):
 
         if state == "active":
             logger.info(f"{service} is running ✅")
+            logger.info(f"Remote Management Access will be disabled automatically in {timer_override} hours")
+            disable_in_x_hours(logger, timer_override)
         else:
             logger.warning(f"{service} is NOT running (state={state})")
 
@@ -208,6 +213,7 @@ def turn_off(logger):
     """
     Disable and stop reverse-ssh.service if present, then verify it's running.
     """
+    logger.info(f"Disabling the Remote Access Management Service...")
     service = "reverse-ssh.service"
 
     logger.debug(f"Checking for {service}...")
@@ -222,7 +228,7 @@ def turn_off(logger):
             logger.error(f"{service} not found on this system. Aborting.")
             return
 
-        logger.debug(f"{service} found. Enabling and starting...")
+        logger.debug(f"{service} found. Disabling and stopping...")
 
         subprocess.run(["sudo", "systemctl", "stop", service], check=True)
         subprocess.run(["sudo", "systemctl", "disable", service], check=True)
@@ -246,6 +252,7 @@ def show_status(logger):
     """
     show reverse-ssh.service status if present
     """
+    logger.info(f"Checking the status of the Remote Access Management Service...")
     service = "reverse-ssh.service"
 
     logger.debug(f"Checking for {service}...")
@@ -277,6 +284,62 @@ def show_status(logger):
     except subprocess.CalledProcessError as e:
         logger.error(f"Error managing {service}: {e.stderr.strip()}")
 
+def install_sw(logger):
+    """
+    Install mgmt-access.py into /usr/local/sbin and make it executable.
+    """
+    src = Path("./mgmt-access.py").resolve()
+    dst_dir = Path("/usr/local/sbin")
+    dst = dst_dir / "mgmt-access.py"
+
+    if not src.exists():
+        logger.error(f"Source file not found: {src}")
+        return
+
+    try:
+        # Ensure destination directory exists
+        if not dst_dir.exists():
+            logger.info(f"Creating directory {dst_dir}")
+            dst_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy file
+        shutil.copy2(src, dst)
+        logger.info(f"Copied {src} -> {dst}")
+
+        # Make executable
+        st = os.stat(dst)
+        os.chmod(dst, st.st_mode | 0o111)  # add execute bits
+        logger.info(f"Made {dst} executable")
+
+    except Exception as e:
+        logger.error(f"Failed to install {src} to {dst_dir}: {e}")
+
+def disable_in_x_hours(logger, timer_override):
+    """
+    Schedule /usr/local/sbin/mgmt-access.py --off to run once after timer_override hours.
+    Uses the 'at' command.
+    """
+    try:
+        # Ensure timer_override is a positive integer
+        hours = int(timer_override)
+        if hours <= 0:
+            logger.error(f"Invalid timer_override: {timer_override}. Must be > 0.")
+            return
+
+        cmd = f"/usr/local/sbin/mgmt-access.py --off"
+        at_cmd = f'echo "{cmd}" | at now + {hours} hours'
+
+        logger.debug(f"Scheduling command: {cmd} to run in {hours} hour(s) using 'at'")
+        result = subprocess.run(at_cmd, shell=True, check=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        logger.debug(f"'at' scheduled successfully: {result.stdout.strip()}")
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to schedule with 'at': {e.stderr.strip()}")
+    except ValueError:
+        logger.error(f"timer_override must be an integer (got {timer_override})")
+
 
 
 def timer_override(value):
@@ -284,8 +347,117 @@ def timer_override(value):
     print(f"Applying timer override: {value}")
 
 
-import os
-import subprocess
+def add_ops_user(logger):
+    """
+    Create a restricted user 'ops' who can only run:
+        sudo /usr/local/sbin/mgmt-access.py
+
+    Additions:
+      - Prompts for and sets a password for 'ops'.
+      - Configures login shell to run '/usr/local/sbin/mgmt-access.py --help'.
+    """
+    try:
+        # 1. Check if user exists
+        result = subprocess.run(
+            ["id", "-u", "ops"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        if result.returncode == 0:
+            logger.info("User 'ops' already exists.")
+        else:
+            # Create the user with /bin/bash shell
+            subprocess.run(["sudo", "useradd", "-m", "-s", "/bin/bash", "ops"], check=True)
+            logger.info("Created user 'ops'.")
+
+        # 2. Prompt for password and set it
+        password = getpass.getpass("Enter password for user 'ops': ")
+        confirm = getpass.getpass("Confirm password: ")
+        if password != confirm:
+            logger.error("Passwords do not match. Aborting.")
+            return
+
+        # Use chpasswd to set password
+        subprocess.run(
+            ["sudo", "chpasswd"],
+            input=f"ops:{password}",
+            text=True,
+            check=True
+        )
+        logger.info("Password set for user 'ops'.")
+
+        # 3. Prepare sudoers file
+        sudoers_file = "/etc/sudoers.d/ops"
+        rule = "ops ALL=(ALL) NOPASSWD: /usr/local/sbin/mgmt-access.py\n"
+
+        # Write rule atomically via visudo -cf check
+        tmp_file = "/tmp/ops_sudoers"
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            f.write(rule)
+
+        # Validate syntax with visudo
+        check = subprocess.run(
+            ["sudo", "visudo", "-cf", tmp_file],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        if check.returncode != 0:
+            logger.error(f"visudo check failed: {check.stderr}")
+            return
+
+        # Install file into /etc/sudoers.d/
+        shutil.move(tmp_file, sudoers_file)
+        subprocess.run(["sudo", "chmod", "440", sudoers_file], check=True)
+        logger.info(f"Sudoers restriction applied in {sudoers_file}")
+
+        # 4. Configure login command
+        bash_profile = Path("/home/ops/.bash_profile")
+        login_cmd = "/usr/local/sbin/mgmt-access.py --help"
+        with open(bash_profile, "a", encoding="utf-8") as f:
+            f.write(f"\n# Auto-run mgmt-access help on login\n{login_cmd}\n")
+        subprocess.run(["sudo", "chown", "ops:ops", str(bash_profile)], check=True)
+        logger.info(f"Configured {bash_profile} to run '{login_cmd}' on login.")
+
+        logger.info("User 'ops' created and configured successfully.")
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Command failed: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+
+
+
+def remove_ops_user(logger):
+    """
+    Remove the restricted 'ops' user and its sudoers configuration.
+    Must be run with root privileges.
+    """
+    try:
+        # 1. Check if user exists
+        result = subprocess.run(
+            ["id", "-u", "ops"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        if result.returncode == 0:
+            logger.info("Removing user 'ops' and its home directory...")
+            subprocess.run(["sudo", "userdel", "-r", "ops"], check=True)
+            logger.info("User 'ops' removed.")
+        else:
+            logger.info("User 'ops' does not exist. Skipping user removal.")
+
+        # 2. Remove sudoers file
+        sudoers_file = "/etc/sudoers.d/ops"
+        if os.path.exists(sudoers_file):
+            subprocess.run(["sudo", "rm", "-f", sudoers_file], check=True)
+            logger.info(f"Removed sudoers file {sudoers_file}")
+        else:
+            logger.info("No sudoers file for 'ops' found.")
+
+        logger.info("remove_ops_user() completed successfully.")
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Command failed: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+
 
 def ensure_ssh_key(logger, ssh_dir="/home/support/.ssh", key_name="id_rsa"):
     """
@@ -363,6 +535,30 @@ def check_supported_ubuntu(logger):
 
     logger.info(f"Confirmed supported OS: {name} {ver}")
 
+def ensure_at_installed(logger):
+    """
+    Check if the 'at' command is available. If not, prompt to install it.
+    Works on Ubuntu (requires sudo privileges to install).
+    """
+    if shutil.which("at"):
+        logger.info("'at' command is already installed.")
+        return True
+
+    logger.warning("'at' command is not installed on this system.")
+    choice = input("Would you like to install it now? [y/N]: ").strip().lower()
+
+    if choice == "y":
+        try:
+            logger.info("Installing 'at' using apt...")
+            subprocess.run(["sudo", "apt", "install", "-y", "at"], check=True)
+            logger.info("'at' installed successfully.")
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to install 'at': {e}")
+            return False
+    else:
+        logger.info("User chose not to install 'at'.")
+        return False
 
 def install_server(logger):
     """
@@ -498,6 +694,14 @@ def install_server(logger):
     
     #dump the public key or if its missing offer to create an ssh key pair
     ensure_ssh_key(logger)
+
+    logger.info("installing mgmt-access.py into directory /usr/local/sbin/mgmt-access.py")
+    install_sw(logger)
+
+    #we use at to disable the daemon after xx hours, check its installed
+    ensure_at_installed(logger)
+
+    logger.info("install_server() completed successfully.")
 
     return True
 
@@ -741,6 +945,9 @@ def install_client(logger):
     logger.info("  sudo fail2ban-client set sshd unbanip x.x.x.x")
     logger.info("  sudo fail2ban-client set sshd banip x.x.x.x")
 
+    logger.info("installing mgmt-access.py into directory /usr/local/sbin/mgmt-access.py")
+    install_sw(logger)
+
     logger.info("install_client() completed successfully.")
 
 
@@ -758,6 +965,8 @@ def main():
     parser.add_argument( "--timer-override", type=int, default=None, help="Override management access timer in hours (default=24, requires --on)")
     parser.add_argument("--install-server", action="store_true", help="Install server components")
     parser.add_argument("--install-client", action="store_true", help="Install client components")
+    parser.add_argument("--add-ops-user", action="store_true", help="create an ops user")
+    parser.add_argument("--remove-ops-user", action="store_true", help="remove the ops user")
     # Parse arguments
     args = parser.parse_args()
     # If no arguments besides --log-level, show help and exit
@@ -790,6 +999,10 @@ def main():
         install_server(logger)
     elif args.install_client:
         install_client(logger)
+    elif args.add_ops_user:
+        add_ops_user(logger)
+    elif args.remove_ops_user:
+        remove_ops_user(logger)
     else:
         parser.print_help()
         sys.exit(1)
@@ -798,5 +1011,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-            print(f"tweedle.py Unhandled exception: {e}")
+            print(f"mgmt-access.py Unhandled exception: {e}")
             traceback.print_exc()
