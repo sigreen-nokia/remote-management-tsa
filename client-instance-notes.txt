@@ -1,0 +1,52 @@
+!#/bin/bash
+
+#extracted from file openstack-mgmt-remote-access.txt 
+
+export SERVER_IP="10.20.30.40"
+export CLIENT_SSH_TUNNEL_PORT="8000"
+export SSH_ALLOWED_IP="107.21.96.169" #a vpn endpoint for example
+export SSH_PUB_KEY="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDN820wj1MwrDk2qAzX9p98K4GQnw2oP6B/vRNzbvMEfwIyEWP1aAYh/IWWcCdvCjfdB37aIC3Req2outX1TcM+dDsCV4zXeqx/1ybNif4hylU0WVFYia9fbFBGlClrmgk4YFAG9+IL7zevHIsTeHBfGJgbv+zXaTUONglJlk9Oq120VEYUb9c57DzueXZGANHRt2Qub4dstN9VBSan1yTxvc/u8nHmo09UgoAw3ljc2bZvHzm7rvsjTFHlVGMgzuKbex6yc1NZdHV9Q+mJr1uwjDAfYznmT2f3pcby6ohwpe3ld4Ei51892zXrFIY1J7ZZ1zuG8ACLfsfLJ4EP+VN7EkPaZEV3/JCO8oETz7cWbaFTsN0rorlAwiWOuCc6Yi79Z9JeXjYZhPRHG4Z/2zWn5sPBQ4Skt/dJJY79QcNBgxzBUhWt1v6NarFgvFnpAznit9f56PIBt6K3VegEgTDFY2OTUESvDkENvtWq525zJmAsZd/C6zVFqBRHBivJOf8= support@master.defamatory-lichterman.deepfield.net"
+
+#append the servers public key to auth users
+cat $SSH_PUB_KEY >> /home/support/.ssh/authorized_keys 
+
+#disable ssh passwords, we will only allow ssh keys for access as its more secure
+sudo sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config.d/50-cloud-init.conf
+sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
+sudo sed -i 's/UsePAM yes/UsePAM no/g' /etc/ssh/sshd_config
+echo "ChallengeResponseAuthentication no" | sudo tee -a /etc/ssh/sshd_config
+
+#allow reverse ssh tunnels on vm-in-deepfield-gcp
+sudo sed -i 's/#GatewayPorts no/GatewayPorts yes/g' /etc/ssh/sshd_config
+sudo sed -i 's/#Port 22/Port 8000/g' /etc/ssh/sshd_config
+
+#restart open ssh
+sudo systemctl restart ssh
+
+#install ufw if its missing
+#lock down access to one trusted ip (Trusted VPN for example) and the server ip
+sudo apt install ufw -y
+#open up the required ports
+sudo ufw allow from $SSH_ALLOWED_IP to any port 22 proto tcp
+sudo ufw allow from $SERVER_IP to any port 8000 proto tcp
+sudo ufw allow from $SERVER_IP to any port 8001 proto tcp
+sudo ufw allow from $SERVER_IP to any port 8002 proto tcp
+sudo ufw enable
+sudo ufw status
+
+#enable fail2ban if its missing
+sudo apt install fail2ban -y
+sudo systemctl enable fail2ban
+sudo systemctl start fail2ban
+sudo systemctl status fail2ban
+sudo sed -i 's/#ignoreip = 127.0.0.1/8 ::1/ignoreip = 127.0.0.1/8::1 192.168.1.0/24 $FAIL2BAN_EXCLUDE_IP /g' /etc/fail2ban/jail.conf
+sudo sed -i 's/banaction = iptables-multiport/banaction= ufw/g' /etc/fail2ban/jail.conf
+sudo sed -i 's/port    = ssh/port    = 8000/g' /etc/fail2ban/jail.conf
+sudo systemctl restart fail2ban
+sudo fail2ban-client ping
+sudo fail2ban-client status sshd
+echo "using fial2ban: here are some usefull commands"
+echo "sudo fail2ban-client status sshd" 
+echo "sudo fail2ban-client set sshd unbanip x.x.x.x" 
+echo "sudo fail2ban-client set sshd banip x.x.x.x" 
+

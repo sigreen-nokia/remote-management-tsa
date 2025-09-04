@@ -1,12 +1,13 @@
 
-     ____  _____ _      ____ _____ _____   _      ____  _      ____  _____ _____ _      _____ _      _____    _____ ____  ____ 
-    /  __\/  __// \__/|/  _ Y__ __Y  __/  / \__/|/  _ \/ \  /|/  _ \/  __//  __// \__/|/  __// \  /|/__ __\  /__ __Y ___\/  _ \
-    |  \/||  \  | |\/||| / \| / \ |  \    | |\/||| / \|| |\ ||| / \|| |  _|  \  | |\/|||  \  | |\ ||  / \      / \ |    \| / \|
-    |    /|  /_ | |  ||| \_/| | | |  /_   | |  ||| |-||| | \||| |-||| |_//|  /_ | |  |||  /_ | | \||  | |      | | \___ || |-||
-    \_/\_\\____\\_/  \|\____/ \_/ \____\  \_/  \|\_/ \|\_/  \|\_/ \|\____\\____\\_/  \|\____\\_/  \|  \_/      \_/ \____/\_/ \|
-    
+
+
 ## What is Remote management TSA:
 
 * A client server tool which creates secured reverse SSH tunnels on demand, in line with TSA regs Managagement access requirements. 
-* The tool runs on Unvuntu Linux 
+* The tool runs on Ubuntu Linux 
+
+```
+pip install -r ./requirements.txt
+python3 remote-mgmt-tsa.py --help
+```
 
