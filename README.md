@@ -11,6 +11,7 @@ pip install -r ./requirements.txt
 python3 remote-mgmt-tsa.py --help
 
 #install the server (where the reverse ssh is started and stopped by ops)
+#this can be ran safely on a DCU
 python3 remote-mgmt-tsa.py --install-server
 python3 remote-mgmt-tsa.py --add-ops-user  
 
