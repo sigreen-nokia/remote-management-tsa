@@ -166,20 +166,118 @@ def get_persistent_config(logger, varname, default, prompt=True, cast=None):
 
 
 
-def turn_on(timer_override=None):
-    # Placeholder: logic to enable management access
-    if timer_override is not None:
-        print(f"Turning management access ON (timer override: {timer_override})")
-    else:
-        print("Turning management access ON")
+def turn_on(logger, timer_override=None):
+    """
+    Enable and start reverse-ssh.service if present, then verify it's running.
+    """
+    service = "reverse-ssh.service"
+
+    logger.debug(f"Checking for {service}...")
+
+    try:
+        # Check if service exists
+        result = subprocess.run(
+            ["systemctl", "list-unit-files", service],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+        )
+        if service not in result.stdout:
+            logger.error(f"{service} not found on this system. Aborting.")
+            return
+
+        logger.debug(f"{service} found. Enabling and starting...")
+
+        subprocess.run(["sudo", "systemctl", "enable", service], check=True)
+        subprocess.run(["sudo", "systemctl", "start", service], check=True)
+
+        # Check if it's active
+        status_check = subprocess.run(
+            ["systemctl", "is-active", service],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+        )
+        state = status_check.stdout.strip()
+
+        if state == "active":
+            logger.info(f"{service} is running ✅")
+        else:
+            logger.warning(f"{service} is NOT running (state={state})")
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error managing {service}: {e.stderr.strip()}")
 
 def turn_off(logger):
-    # Placeholder: logic to disable management access
-    print("Turning management access OFF")
+    """
+    Disable and stop reverse-ssh.service if present, then verify it's running.
+    """
+    service = "reverse-ssh.service"
+
+    logger.debug(f"Checking for {service}...")
+
+    try:
+        # Check if service exists
+        result = subprocess.run(
+            ["systemctl", "list-unit-files", service],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+        )
+        if service not in result.stdout:
+            logger.error(f"{service} not found on this system. Aborting.")
+            return
+
+        logger.debug(f"{service} found. Enabling and starting...")
+
+        subprocess.run(["sudo", "systemctl", "stop", service], check=True)
+        subprocess.run(["sudo", "systemctl", "disable", service], check=True)
+
+        # Check if it's inactive
+        status_check = subprocess.run(
+            ["systemctl", "is-active", service],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+        )
+        state = status_check.stdout.strip()
+
+        if state == "active":
+            logger.warning(f"{service} is still running ")
+        else:
+            logger.info(f"{service} has been stopped ✅")
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error managing {service}: {e.stderr.strip()}")
 
 def show_status(logger):
-    # Placeholder: logic to check current status
-    print("Showing management access STATUS")
+    """
+    show reverse-ssh.service status if present
+    """
+    service = "reverse-ssh.service"
+
+    logger.debug(f"Checking for {service}...")
+
+    try:
+        # Check if service exists
+        result = subprocess.run(
+            ["systemctl", "list-unit-files", service],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+        )
+        if service not in result.stdout:
+            logger.error(f"{service} not found on this system. Aborting.")
+            return
+
+        logger.debug(f"{service} found. Checking status...")
+
+        # Check if it's active
+        status_check = subprocess.run(
+            ["systemctl", "is-active", service],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+        )
+        state = status_check.stdout.strip()
+
+        if state == "active":
+            logger.info(f"{service} is running ✅")
+        else:
+            logger.warning(f"{service} is NOT running (state={state})")
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error managing {service}: {e.stderr.strip()}")
+
+
 
 def timer_override(value):
     # Placeholder: logic to override timer
@@ -370,26 +468,26 @@ def install_server(logger):
         logger.error(f"Failed to write {unit_path}: {e}")
         return False
 
-    # --- 4) Enable service (don’t start it yet) ---
+    # --- 4) Enable service (dont start it yet) ---
     try:
         logger.info("Reloading systemd units...")
         run(["sudo", "systemctl", "daemon-reload"])
 
-        logger.info("Enabling reverse-ssh.service...")
-        run(["sudo", "systemctl", "enable", "reverse-ssh.service"])
+        #logger.info("Enabling reverse-ssh.service...")
+        #run(["sudo", "systemctl", "enable", "reverse-ssh.service"])
 
         logger.info("Stopping reverse-ssh.service to ensure a clean state...")
         # Stop may fail if not running; do not check
         run(["sudo", "systemctl", "stop", "reverse-ssh.service"], check=False)
 
-        logger.info("Querying status (this may show 'inactive/dead' until you start it)...")
-        status = run(["sudo", "systemctl", "status", "reverse-ssh.service"], check=False, capture_output=True)
-        logger.debug("\n" + status.stdout.strip())
+        logger.info("Disabling reverse-ssh.service to ensure a clean state...")
+        # disable may fail; do not check
+        run(["sudo", "systemctl", "disable", "reverse-ssh.service"], check=False)
+
     except subprocess.CalledProcessError as e:
         logger.error(f"systemd configuration failed: {e}")
         return False
 
-    # --- Friendly notes (from your script) ---
     logger.info("Note: to test autossh")
     logger.info(f"ssh support@{CLIENT_FQDN} -p {CLIENT_SSH_TUNNEL_PORT}")
     logger.info(f"autossh {AUTOSSH_HOST_ALIAS}")
@@ -676,14 +774,12 @@ def main():
     #setup argument parser
     parser = argparse.ArgumentParser( description="Management Access Control Tool")
     #--timer-override without --on, print help and exit 
-    #if args.timer_override is not None and not args.on:
-    #    parser.error("--timer-override requires --on")
     if args.timer_override is not None and not args.on:
         parser.error("--timer-override requires --on")
     #check args and run the functions to do the things
     if args.on:
         timer_value = args.timer_override if args.timer_override is not None else 24
-        turn_on(timer_override=timer_value)
+        turn_on(logger, timer_override=timer_value)
     elif args.off:
         turn_off(logger)
     elif args.status:
