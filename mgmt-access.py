@@ -784,7 +784,7 @@ def install_client(logger):
             dst = src.with_suffix(src.suffix + f".bak-{ts}")
             try:
                 shutil.copy2(src, dst)
-                logger.info(f"Backed up {src} to {dst}")
+                logger.info(f"Note: I have Backed up file {src} before modifying to file {dst}")
             except Exception as e:
                 logger.warning(f"Could not backup {src}: {e}")
 
