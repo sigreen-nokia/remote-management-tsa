@@ -516,7 +516,7 @@ def check_not_dcu(logger):
         sys.exit(1)
 
 def check_supported_ubuntu(logger):
-    """Abort unless running on Ubuntu 18.04, 20.04, 22.04, or 24.04."""
+    """Abort unless running on Ubuntu 18.04, 20.04, 22.04, or 24.04, or 25.04."""
     dist = ("", "", "")
     if hasattr(platform, "linux_distribution"):  # deprecated after 3.7
         dist = platform.linux_distribution()
@@ -535,9 +535,9 @@ def check_supported_ubuntu(logger):
             dist = ("", "", "")
 
     name, ver, _ = dist
-    if name != "Ubuntu" or ver.split(".")[0] not in ("18", "20", "22", "24"):
+    if name != "Ubuntu" or ver.split(".")[0] not in ("18", "20", "22", "24", "25"):
         logger.error(f"Unsupported OS detected: {name} {ver}. "
-                     "install_client() only supports Ubuntu 18.04, 20.04, 22.04, or 24.04.")
+                     "install_client() only supports Ubuntu 18.04, 20.04, 22.04, or 24.04, or 25.04.")
         sys.exit(1)
 
     logger.info(f"Confirmed supported OS: {name} {ver}")
