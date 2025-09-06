@@ -581,7 +581,7 @@ def install_server(logger):
     CLIENT_SSH_TUNNEL_PORT  = get_persistent_config(logger, "CLIENT_SSH_TUNNEL_PORT", "8000")
     CLIENT_SSH_PORT_FORWARD = get_persistent_config(logger, "CLIENT_SSH_PORT_FORWARD", "8001")
     CLIENT_UI_PORT_FORWARD  = get_persistent_config(logger, "CLIENT_UI_PORT_FORWARD", "8002")
-    CLIENT_FQDN_OR_IP             = get_persistent_config(logger, "CLIENT_FQDN_OR_IP", "86.146.112.89")
+    CLIENT_FQDN_OR_IP             = get_persistent_config(logger, "CLIENT_FQDN_OR_IP", "10.20.30.40")
 
     # The host alias used by autossh (matches the Host entry we write below).
     AUTOSSH_HOST_ALIAS = CLIENT_FQDN_OR_IP  # in your bash you used "vm-in-deepfield-gcp"; align as needed
