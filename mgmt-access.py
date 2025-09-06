@@ -777,15 +777,6 @@ def install_client(logger):
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
             )
 
-#    def ensure_pkg(pkg):
-#        # idempotent install for apt packages
-#        try:
-#            run(f"dpkg -s {pkg}")
-#            logger.info(f"Package already installed: {pkg}")
-#        except subprocess.CalledProcessError:
-#            run("sudo apt-get update -y || true", check=False)
-#            run(f"sudo apt-get install -y {pkg}")
-
     def read_text(p):
         try:
             return Path(p).read_text(encoding="utf-8")
@@ -863,6 +854,11 @@ def install_client(logger):
     SSH_PUB_KEY = get_persistent_config(logger, "SSH_PUB_KEY", "")  # type: ignore[name-defined]
 
     logger.info(f"SERVER_IP={SERVER_IP}, CLIENT_SSH_TUNNEL_PORT={CLIENT_SSH_TUNNEL_PORT}, SSH_ALLOWED_IP={SSH_ALLOWED_IP}")
+
+    # -- let the user know we are about to lock down ssh ----
+    logger.info(f"Warning: On completion ssh will be locked down in ufw to only allow the following source addresses")
+    logger.info(f"from the CLIENT_SSH_TUNNEL_PORT {CLIENT_SSH_TUNNEL_PORT} on port 22")
+    logger.info(f"from the SERVER_IP {SERVER_IP} on port {CLIENT_SSH_TUNNEL_PORT}")
 
     # --- 1) authorized_keys for support user --------------------------------
     support_home = Path("/home/support")
