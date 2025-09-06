@@ -252,11 +252,15 @@ def turn_off(logger):
     except subprocess.CalledProcessError as e:
         logger.error(f"Error managing {service}: {e.stderr.strip()}")
 
+import subprocess
+import logging
+
 def show_status(logger):
     """
-    show reverse-ssh.service status if present
+    Show reverse-ssh.service status if present.
+    If log level is DEBUG, dump full `systemctl status` output.
     """
-    logger.info(f"Checking the status of the Remote Access Management Service...")
+    logger.info("Checking the status of the Remote Access Management Service...")
     service = "reverse-ssh.service"
 
     logger.debug(f"Checking for {service}...")
@@ -273,20 +277,30 @@ def show_status(logger):
 
         logger.debug(f"{service} found. Checking status...")
 
-        # Check if it's active
-        status_check = subprocess.run(
-            ["systemctl", "is-active", service],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
-        )
-        state = status_check.stdout.strip()
-
-        if state == "active":
-            logger.info(f"{service} is running ✅")
+        # If DEBUG → dump full status output
+        if logger.isEnabledFor(logging.DEBUG):
+            full_status = subprocess.run(
+                ["systemctl", "status", service],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+            )
+            logger.debug(f"Full systemctl status for {service}:\n{full_status.stdout.strip()}")
         else:
-            logger.warning(f"{service} is NOT running (state={state})")
+            # Only check active state
+            status_check = subprocess.run(
+                ["systemctl", "is-active", service],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+            )
+            state = status_check.stdout.strip()
+
+            if state == "active":
+                logger.info(f"{service} is running ✅")
+            else:
+                logger.warning(f"{service} is NOT running (state={state})")
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error managing {service}: {e.stderr.strip()}")
+
+
 
 def install_sw(logger):
     """
