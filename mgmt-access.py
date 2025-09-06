@@ -333,7 +333,7 @@ def ensure_pkg(pkg, logger):
         if choice == "y":
             logger.info(f"Installing package: {pkg}")
             subprocess.run("sudo apt-get update -y || true", shell=True, check=False)
-            subprocess.run(f"sudo apt-get install -y {pkg}", shell=True, check=True)
+            subprocess.run(f"export DEBIAN_FRONTEND=noninteractive; sudo apt-get install -y {pkg}", shell=True, check=True)
             logger.info(f"Package '{pkg}' installed successfully.")
         else:
             logger.error(f"Cannot continue without installing '{pkg}'.")
