@@ -318,6 +318,28 @@ def install_sw(logger):
     except Exception as e:
         logger.error(f"Failed to install {src} to {dst_dir}: {e}")
 
+def ensure_pkg(pkg, logger):
+    """
+    Ensure a package is installed, prompt user if missing.
+    Idempotent for apt packages.
+    """
+    try:
+        subprocess.run(["dpkg", "-s", pkg], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        logger.info(f"Package already installed: {pkg}")
+    except subprocess.CalledProcessError:
+        logger.debug(f"The package '{pkg}' is required but not installed.")
+        choice = input(f"'{pkg}' is not installed but is required. Do you want me to install it now? [y/N]: ").strip().lower()
+
+        if choice == "y":
+            logger.info(f"Installing package: {pkg}")
+            subprocess.run("sudo apt-get update -y || true", shell=True, check=False)
+            subprocess.run(f"sudo apt-get install -y {pkg}", shell=True, check=True)
+            logger.info(f"Package '{pkg}' installed successfully.")
+        else:
+            logger.error(f"Cannot continue without installing '{pkg}'.")
+            raise RuntimeError(f"Required package '{pkg}' not installed.")
+
+
 def disable_in_x_hours(logger, timer_override):
     """ 
     Schedule /usr/local/sbin/mgmt-access.py --off to run once after timer_override hours.
@@ -542,30 +564,6 @@ def check_supported_ubuntu(logger):
 
     logger.info(f"Confirmed supported OS: {name} {ver}")
 
-def ensure_at_installed(logger):
-    """
-    Check if the 'at' command is available. If not, prompt to install it.
-    Works on Ubuntu (requires sudo privileges to install).
-    """
-    if shutil.which("at"):
-        logger.info("'at' command is already installed.")
-        return True
-
-    logger.warning("'at' command is not installed on this system.")
-    choice = input("Would you like to install it now? [y/N]: ").strip().lower()
-
-    if choice == "y":
-        try:
-            logger.info("Installing 'at' using apt...")
-            subprocess.run(["sudo", "apt", "install", "-y", "at"], check=True)
-            logger.info("'at' installed successfully.")
-            return True
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to install 'at': {e}")
-            return False
-    else:
-        logger.info("User chose not to install 'at'.")
-        return False
 
 def install_server(logger):
     """
@@ -582,11 +580,11 @@ def install_server(logger):
     #prompt for each of the variables, and store localy as .file so th enext run has good default
     CLIENT_SSH_TUNNEL_PORT  = get_persistent_config(logger, "CLIENT_SSH_TUNNEL_PORT", "8000")
     CLIENT_SSH_PORT_FORWARD = get_persistent_config(logger, "CLIENT_SSH_PORT_FORWARD", "8001")
-    CLIENT_UI_PORT_FORWARD  = get_persistent_config(logger, "CLIENT_UI_PORT_FORWARD", "9001")
-    CLIENT_FQDN             = get_persistent_config(logger, "CLIENT_FQDN", "86.146.112.89")
+    CLIENT_UI_PORT_FORWARD  = get_persistent_config(logger, "CLIENT_UI_PORT_FORWARD", "8002")
+    CLIENT_FQDN_OR_IP             = get_persistent_config(logger, "CLIENT_FQDN_OR_IP", "86.146.112.89")
 
     # The host alias used by autossh (matches the Host entry we write below).
-    AUTOSSH_HOST_ALIAS = CLIENT_FQDN  # in your bash you used "vm-in-deepfield-gcp"; align as needed
+    AUTOSSH_HOST_ALIAS = CLIENT_FQDN_OR_IP  # in your bash you used "vm-in-deepfield-gcp"; align as needed
 
     # Paths we write:
     ssh_cfg_path = "/etc/ssh/ssh_config.d/auto-ssh-systemd-hosts.conf"
@@ -615,24 +613,12 @@ def install_server(logger):
         return False
 
     # --- 1) Ensure autossh is installed ---
-    try:
-        if which("autossh"):
-            logger.info("autossh is already installed. Skipping installation.")
-        else:
-            logger.info("Installing autossh (apt)...")
-            if which("apt"):
-                run(["sudo", "apt", "update"])
-                run(["sudo", "apt", "install", "-y", "autossh"])
-            else:
-                logger.warning("apt not found; attempting to continue (autossh must already be installed).")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Failed to install autossh: {e}")
-        return False
+    ensure_pkg("autossh", logger)
 
     # --- 2) Write ssh_config snippet ---
     ssh_cfg_content = textwrap.dedent(f"""\
-        Host {CLIENT_FQDN}
-            HostName {CLIENT_FQDN}
+        Host {CLIENT_FQDN_OR_IP}
+            HostName {CLIENT_FQDN_OR_IP}
             IdentityFile /home/support/.ssh/id_rsa
             User support
             Port {CLIENT_SSH_TUNNEL_PORT}
@@ -692,7 +678,7 @@ def install_server(logger):
         return False
 
     logger.info("Note: to test autossh")
-    logger.info(f"ssh support@{CLIENT_FQDN} -p {CLIENT_SSH_TUNNEL_PORT}")
+    logger.info(f"ssh support@{CLIENT_FQDN_OR_IP} -p {CLIENT_SSH_TUNNEL_PORT}")
     logger.info(f"autossh {AUTOSSH_HOST_ALIAS}")
     logger.info("Service has been installed. Useful commands:")
     logger.info("  sudo systemctl start reverse-ssh.service")
@@ -706,7 +692,7 @@ def install_server(logger):
     install_sw(logger)
 
     #we use at to disable the daemon after xx hours, check its installed
-    ensure_at_installed(logger)
+    ensure_pkg("at", logger)
 
     logger.info("install_server() completed successfully.")
 
@@ -744,14 +730,14 @@ def install_client(logger):
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
             )
 
-    def ensure_pkg(pkg):
-        # idempotent install for apt packages
-        try:
-            run(f"dpkg -s {pkg}")
-            logger.info(f"Package already installed: {pkg}")
-        except subprocess.CalledProcessError:
-            run("sudo apt-get update -y || true", check=False)
-            run(f"sudo apt-get install -y {pkg}")
+#    def ensure_pkg(pkg):
+#        # idempotent install for apt packages
+#        try:
+#            run(f"dpkg -s {pkg}")
+#            logger.info(f"Package already installed: {pkg}")
+#        except subprocess.CalledProcessError:
+#            run("sudo apt-get update -y || true", check=False)
+#            run(f"sudo apt-get install -y {pkg}")
 
     def read_text(p):
         try:
@@ -875,7 +861,7 @@ def install_client(logger):
         raise
 
     # --- 3) UFW --------------------------------------------------------------
-    ensure_pkg("ufw")
+    ensure_pkg("ufw", logger)
     run(f"sudo ufw allow from {SSH_ALLOWED_IP} to any port 22 proto tcp")
     for p in ("8000", "8001", "8002"):
         run(f"sudo ufw allow from {SERVER_IP} to any port {p} proto tcp")
@@ -883,7 +869,7 @@ def install_client(logger):
     run("sudo ufw status", check=False)
 
     # --- 4) fail2ban via jail.local (safer than editing jail.conf) ----------
-    ensure_pkg("fail2ban")
+    ensure_pkg("fail2ban", logger)
     run("sudo systemctl enable fail2ban", check=False)
     run("sudo systemctl start fail2ban", check=False)
 
