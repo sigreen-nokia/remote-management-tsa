@@ -353,6 +353,39 @@ def ensure_pkg(pkg, logger):
             logger.error(f"Cannot continue without installing '{pkg}'.")
             raise RuntimeError(f"Required package '{pkg}' not installed.")
 
+def backup_iptables(logger, backup_dir="/var/backups/iptables"):
+    """
+    Backup IPv4 and IPv6 iptables rules into timestamped files.
+    
+    :param logger: logging instance
+    :param backup_dir: directory to store backup files
+    """
+    os.makedirs(backup_dir, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    files = {
+        "ipv4": os.path.join(backup_dir, f"iptables-backup-{timestamp}.rules"),
+        "ipv6": os.path.join(backup_dir, f"ip6tables-backup-{timestamp}.rules"),
+    }
+
+    try:
+        logger.info(f"Backing up IPv4 iptables to {files['ipv4']}")
+        with open(files["ipv4"], "w") as f:
+            subprocess.run(["iptables-save"], stdout=f, stderr=subprocess.PIPE, check=True, text=True)
+
+        logger.info(f"Backing up IPv6 iptables to {files['ipv6']}")
+        with open(files["ipv6"], "w") as f:
+            subprocess.run(["ip6tables-save"], stdout=f, stderr=subprocess.PIPE, check=True, text=True)
+
+        logger.info("iptables backup completed successfully ✅")
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to backup iptables: {e.stderr.strip()}")
+    except Exception as e:
+        logger.error(f"Unexpected error during iptables backup: {e}")
+
+    return files
+
 
 def disable_in_x_hours(logger, timer_override):
     """ 
@@ -874,6 +907,8 @@ def install_client(logger):
         raise
 
     # --- 3) UFW --------------------------------------------------------------
+    #backup the existing iptables rules to /var/backups/iptables 
+    backup_iptables(logger)
     ensure_pkg("ufw", logger)
     run(f"sudo ufw allow from {SSH_ALLOWED_IP} to any port 22 proto tcp")
     for p in ("9000", "9001", "9002"):
