@@ -1308,7 +1308,7 @@ def install_server(logger):
 
         [Service]
         User=support
-        ExecStart=/usr/bin/autossh -M 0 -N -q -o "ServerAliveInterval=60" -o "ServerAliveCountMax=3" "StrictHostKeyChecking=no" {AUTOSSH_HOST_ALIAS}
+        ExecStart=/usr/bin/autossh -M 0 -N -q -o "ServerAliveInterval=60" -o "ServerAliveCountMax=3" -o "StrictHostKeyChecking=no" {AUTOSSH_HOST_ALIAS}
         ExecStop=/usr/bin/killall -s KILL autossh
         Restart=always
         RestartSec=3
