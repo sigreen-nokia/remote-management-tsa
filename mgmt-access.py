@@ -18,6 +18,7 @@ import re
 import datetime
 import getpass
 import pwd
+import shlex
 
 def setup_logger(level=logging.INFO):
     # Don’t let logging print handler tracebacks on emit errors
@@ -115,43 +116,295 @@ def check_running_as_root(logger=None):
             logger.debug("Confirmed running as root (uid=0).")
 
 #used in install_client and install_server in a slightly different way
+
+_SHELL_METACHARS = ("|", "&", ";", "<", ">", "(", ")", "$", "`", "\\", '"', "'", "{", "}", "[", "]", "*", "?", "~", "||", "&&")
+
+def _needs_shell(cmd_str: str) -> bool:
+    return any(tok in cmd_str for tok in _SHELL_METACHARS)
+
 def run(cmd, check=True, capture_output=False, logger=None):
     """
-    Wrapper for running shell commands.
+    Unified command runner.
 
-    - Uses run_cmd(logger, cmd, check, capture_output) if defined in the module.
-    - Falls back to subprocess.run().
-    - Accepts str or list for cmd.
-    - Provides optional capture_output (stdout/stderr).
-    - Logs at DEBUG/INFO if logger is provided.
+    - Prefers run_cmd(logger, cmd, check, capture_output) if defined.
+    - Falls back to subprocess.run with smart shell detection.
+    - Accepts str or list for `cmd`.
+    - ALWAYS returns an object whose .stdout/.stderr are strings (never None).
     """
-    # Prefer custom run_cmd() if present
+    # Try custom run_cmd if available
     try:
         if "run_cmd" in globals():
-            return run_cmd(logger, cmd, check=check, capture_output=capture_output)  # type: ignore[name-defined]
-    except Exception:
-        pass
+            proc = run_cmd(logger, cmd, check=check, capture_output=capture_output)  # type: ignore[name-defined]
+            # Normalize outputs to strings
+            try:
+                if getattr(proc, "stdout", None) is None:
+                    proc.stdout = ""
+                if getattr(proc, "stderr", None) is None:
+                    proc.stderr = ""
+            except Exception:
+                pass
+            return proc
+    except Exception as e:
+        if logger:
+            logger.debug(f"run_cmd() failed, falling back to subprocess.run: {e}")
 
-    # Fallback: subprocess.run
+    # Logging
     if logger:
-        level = logger.debug if capture_output else logger.info
-        level(f"RUN: {cmd}")
+        # Use DEBUG if we're capturing; INFO otherwise
+        (logger.debug if capture_output else logger.info)(f"RUN: {cmd}")
 
-    # Decide how to run command
-    if isinstance(cmd, str):
-        cmd_list = shlex.split(cmd)
+    # Decide shell vs. arg list
+    use_shell = isinstance(cmd, str) and _needs_shell(cmd)
+    if isinstance(cmd, list):
+        args = cmd
+    elif use_shell:
+        args = cmd  # pass the raw string to the shell
     else:
-        cmd_list = cmd
+        args = shlex.split(cmd)
 
-    return subprocess.run(
-        cmd_list,
+    # Run
+    proc = subprocess.run(
+        args,
+        shell=use_shell,
         check=check,
-        capture_output=capture_output,
         text=True,
+        capture_output=capture_output,
     )
 
+    # Ensure stdout/stderr are always strings (never None)
+    # Note: if capture_output=False, these will be empty strings.
+    proc.stdout = proc.stdout or ""
+    proc.stderr = proc.stderr or ""
 
-def backup_file(p):
+    return proc
+
+
+
+
+
+
+
+#def run(cmd, check=True, capture_output=False, logger=None):
+#    """
+#    Wrapper for running shell commands.
+#
+#    - Uses run_cmd(logger, cmd, check, capture_output) if defined in the module.
+#    - Falls back to subprocess.run().
+#    - Accepts str or list for cmd.
+#    - Provides optional capture_output (stdout/stderr).
+#    - Logs at DEBUG/INFO if logger is provided.
+#    """
+#    # Prefer custom run_cmd() if present
+#    try:
+#        if "run_cmd" in globals():
+#            return run_cmd(logger, cmd, check=check, capture_output=capture_output)  # type: ignore[name-defined]
+#    except Exception:
+#        pass
+#
+#    # Fallback: subprocess.run
+#    if logger:
+#        level = logger.debug if capture_output else logger.info
+#        level(f"RUN: {cmd}")
+#
+#    # Decide how to run command
+#    if isinstance(cmd, str):
+#        cmd_list = shlex.split(cmd)
+#    else:
+#        cmd_list = cmd
+#
+#    return subprocess.run(
+#        cmd_list,
+#        check=check,
+#        capture_output=capture_output,
+#        text=True,
+#    )
+
+
+def add_locked_down_sshd(logger, CLIENT_SSH_TUNNEL_PORT, ssh_user="ops"):
+    """
+    Create a locked-down secondary sshd instance bound to CLIENT_SSH_TUNNEL_PORT,
+    restricted to `ssh_user` (default 'ops'), and managed by systemd as
+    'sshd-remote-mgmt.service'.
+
+    Writes:
+      - /etc/ssh/sshd_config_remote_mgmt
+      - /lib/systemd/system/sshd-remote-mgmt.service
+
+    Then runs:
+      systemctl stop/daemon-reload/enable/start/status on the new unit.
+    """
+    if os.geteuid() != 0:
+        logger.error("add_locked_down_sshd() must be run as root (sudo).")
+        raise PermissionError("Root privileges required")
+
+    # Friendly warning if the user doesn't exist
+    try:
+        pwd.getpwnam(ssh_user)
+    except KeyError:
+        logger.warning(f"User '{ssh_user}' does not exist. AllowUsers will restrict access to a non-existent user.")
+
+    cfg_path = Path("/etc/ssh/sshd_config_remote_mgmt")
+    unit_path = Path("/lib/systemd/system/sshd-remote-mgmt.service")
+
+    cfg_text = (
+        "# remote-management-tsa locked down ssh daemon\n"
+        f"AllowUsers {ssh_user}\n"
+        "KbdInteractiveAuthentication no\n"
+        "X11Forwarding yes\n"
+        "PrintMotd no\n"
+        "AcceptEnv LANG LC_*\n"
+        "PasswordAuthentication no\n"
+        "UsePAM no\n"
+        "ChallengeResponseAuthentication no\n"
+        "GatewayPorts yes\n"
+        f"Port {CLIENT_SSH_TUNNEL_PORT}\n"
+    )
+
+    unit_text = (
+        "[Unit]\n"
+        "Description=OpenBSD Secure Shell server\n"
+        "Documentation=man:sshd(8) man:sshd_config(5)\n"
+        "After=network.target auditd.service\n"
+        "ConditionPathExists=!/etc/ssh/sshd_not_to_be_run\n"
+        "\n"
+        "[Service]\n"
+        "EnvironmentFile=-/etc/default/ssh\n"
+        "ExecStartPre=/usr/sbin/sshd -t\n"
+        "ExecStart=/usr/sbin/sshd -D $SSHD_OPTS -f /etc/ssh/sshd_config_remote_mgmt\n"
+        "ExecReload=/usr/sbin/sshd -t\n"
+        "ExecReload=/bin/kill -HUP $MAINPID\n"
+        "KillMode=process\n"
+        "Restart=on-failure\n"
+        "RestartPreventExitStatus=255\n"
+        "Type=notify\n"
+        "RuntimeDirectory=sshd\n"
+        "RuntimeDirectoryMode=0755\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=multi-user.target\n"
+        "Alias=sshd-remote-mgmt.service\n"
+    )
+
+    def _atomic_write(path: Path, text: str, mode=0o644):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                if not text.endswith("\n"):
+                    text += "\n"
+                f.write(text)
+            os.chmod(tmp, mode)
+            os.replace(tmp, path)
+        finally:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+
+    # 1) Write config
+    logger.info(f"Writing {cfg_path} …")
+    backup_file(cfg_path, logger)
+    _atomic_write(cfg_path, cfg_text, mode=0o644)
+
+    # 2) Write unit file
+    logger.info(f"Writing {unit_path} …")
+    backup_file(unit_path, logger)
+    _atomic_write(unit_path, unit_text, mode=0o644)
+
+    # Validate the custom config before touching the service
+    logger.info("Validating sshd config …")
+    try:
+        # Validate explicitly against the new config
+        run(f"/usr/sbin/sshd -t -f {cfg_path}", check=True, capture_output=True, logger=logger)
+    except Exception as e:
+        logger.error(f"sshd config validation failed for {cfg_path}: {e}")
+        raise
+
+    # 3) Setup and start the service
+    logger.info("Configuring systemd unit sshd-remote-mgmt.service …")
+    run("sudo systemctl stop sshd-remote-mgmt.service", check=False, logger=logger)
+    run("sudo systemctl daemon-reload", check=True, logger=logger)
+    run("sudo systemctl enable sshd-remote-mgmt.service", check=True, logger=logger)
+    run("sudo systemctl start sshd-remote-mgmt.service", check=True, logger=logger)
+
+    # Show status (no-pager), log output for visibility
+    status = run("sudo systemctl status sshd-remote-mgmt.service --no-pager --full",
+                 check=False, capture_output=True, logger=logger)
+    if status.stdout:
+        logger.debug(status.stdout.strip())
+
+    logger.info("Locked-down sshd instance is deployed and started ✅")
+
+
+
+
+
+def harden_sshd(logger, CLIENT_SSH_TUNNEL_PORT, ssh_login_user="ops"):
+    """
+    Prompt the operator, then switch sshd to key-only auth and set the tunnel port.
+    Aborts unless the operator explicitly confirms.
+    """
+    sshd_main = "/etc/ssh/sshd_config"
+    sshd_cloudinit = "/etc/ssh/sshd_config.d/50-cloud-init.conf"
+    auth_keys = Path(f"/home/{ssh_login_user}/.ssh/authorized_keys")
+
+    #setup ssh to work on port 22 and CLIENT_SSH_TUNNEL_PORT at the same time 
+    logger.info(f"Setting sshd up to use two ports 22 and {CLIENT_SSH_TUNNEL_PORT}")
+    replace_or_add_line(
+        sshd_main,
+        r"^\s*Port\s+",
+        f"Port {CLIENT_SSH_TUNNEL_PORT}",
+        logger=logger,
+        extra_lines=["Port 22"],   # keep a fallback listener if you want
+    )
+
+    logger.warning("Next step I will DISABLE SSH password authentication (key-pairs only).")
+    logger.warning(f"To avoid being locked out, Ensure you have ssh using key pairs working for this user before proceeding ")
+    # Best-effort local sanity check
+    if not auth_keys.exists() or auth_keys.stat().st_size == 0:
+        logger.warning(f"No public keys found at {auth_keys}.")
+
+    #loop untill the user confirms they have an ssh pub key installed, else they will lock themselfes out
+    try:
+        while True:
+            confirm = input(
+                "Type YES to proceed with disabling password logins (key-only). "
+                "Ensure your SSH key pair is configured for this user. "
+                "(Ctrl-C to abort): "
+            ).strip()
+            if confirm == "YES":
+                break
+            logger.info("waiting for you to confirm that your ssh key pairs have been configured for this user")
+    except (KeyboardInterrupt, EOFError):
+        logger.info("Remote management will not work untill you rerun the client-install and confirm this option")
+        logger.info("Cancelled: leaving sshd password authentication unchanged.")
+        return
+
+    logger.info("Disabling password access in sshd; key pairs only.")
+    logger.info("Additionaly enabling port forwarding in sshd")
+    if Path(sshd_cloudinit).exists():
+        replace_or_add_line(
+            sshd_cloudinit,
+            r"^\s*PasswordAuthentication\s+",
+            "PasswordAuthentication no",
+            logger=logger,
+        )
+
+    replace_or_add_line(sshd_main, r"^\s*PasswordAuthentication\s+", "PasswordAuthentication no", logger=logger)
+    replace_or_add_line(sshd_main, r"^\s*UsePAM\s+", "UsePAM no", logger=logger)
+    replace_or_add_line(sshd_main, r"^\s*ChallengeResponseAuthentication\s+", "ChallengeResponseAuthentication no", logger=logger)
+    replace_or_add_line(sshd_main, r"^\s*GatewayPorts\s+", "GatewayPorts yes", logger=logger)
+
+    try:
+        run("sudo systemctl restart ssh", check=True, logger=logger)
+        logger.info("sshd restarted successfully.")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to restart ssh: {e.stderr.strip()}")
+        raise
+
+
+
+def backup_file(p, logger):
     """Backup config file p if it exists, to <p>.bak-YYYYmmdd-HHMMSS"""
     src = Path(p)
     if src.exists():
@@ -164,13 +417,52 @@ def backup_file(p):
             logger.warning(f"Could not backup {src}: {e}")
 
 
+def configure_ops_login_banner(logger):
+    server_marker = Path("/etc/systemd/system/reverse-ssh.service")
+    if not server_marker.exists():
+        logger.info("reverse-ssh.service not present; skipping ops bash_profile modification (not a server).")
+        return
 
-def replace_or_add_line(p, key_regex, replacement, extra_lines=None):
+    bash_profile = Path("/home/ops/.bash_profile")
+    login_cmd = "sudo /usr/local/sbin/mgmt-access.py --status"
+    header = "# Auto-run mgmt-access status on login"
+
+    # Ensure file exists
+    bash_profile.parent.mkdir(parents=True, exist_ok=True)
+    if not bash_profile.exists():
+        bash_profile.touch(mode=0o644, exist_ok=True)
+
+    # Append only if not already present
+    try:
+        existing = bash_profile.read_text(encoding="utf-8")
+    except Exception:
+        existing = ""
+
+    if login_cmd in existing:
+        logger.debug(f"'{login_cmd}' already present in {bash_profile}; no change.")
+    else:
+        with open(bash_profile, "a", encoding="utf-8") as f:
+            if not existing.endswith("\n"):
+                f.write("\n")
+            f.write(f"\n{header}\n{login_cmd}\n")
+        logger.info(f"Configured {bash_profile} to run '{login_cmd}' on login.")
+
+    # Best-effort ownership
+    try:
+        run(f"sudo chown ops:ops {bash_profile}", check=False, logger=logger) 
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Could not chown {bash_profile} to ops:ops (non-fatal): {e}")
+
+
+
+
+
+def replace_or_add_line(p, key_regex, replacement, *, logger, extra_lines=None):
     """                 
     Replace first line matching key_regex with replacement; if none matched, append replacement.
     Optionally also ensure extra_lines (list of lines) appear *after* replacement.
     """
-    backup_file(p)  # backup before modifying
+    backup_file(p, logger)  # backup before modifying
     content = read_text(p)
     lines = content.splitlines()
     pat = re.compile(key_regex)
@@ -210,7 +502,7 @@ def write_text(p, content, mode=0o644):
     Path(p).write_text(content, encoding="utf-8")
     os.chmod(p, mode)
 
-def append_if_missing_line(p, line):
+def append_if_missing_line(p, line, logger):
     current = read_text(p)
     needle = line.strip()
     if needle and needle not in current:
@@ -283,7 +575,7 @@ def _import_keys_from_file(auth_keys: Path, file_path: str, logger):
                     continue
                 try:
                     before = auth_keys.read_text(encoding="utf-8") if auth_keys.exists() else ""
-                    append_if_missing_line(auth_keys, line)
+                    append_if_missing_line(auth_keys, line, logger)
                     after = auth_keys.read_text(encoding="utf-8")
                     if after != before:
                         added += 1
@@ -489,50 +781,107 @@ def turn_off(logger):
     except subprocess.CalledProcessError as e:
         logger.error(f"Error managing {service}: {e.stderr.strip()}")
 
+#def show_status(logger):
+#    """
+#    Show reverse-ssh.service status if present.
+#    If log level is DEBUG, dump full `systemctl status` output.
+#    """
+#    logger.info("Checking the status of the Remote Access Management Service...")
+#    service = "reverse-ssh.service"
+#
+#    logger.debug(f"Checking for {service}...")
+#
+#    try:
+#        # Check if service exists
+#        result = subprocess.run(
+#            ["systemctl", "list-unit-files", service],
+#            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+#        )
+#        if service not in result.stdout:
+#            logger.error(f"{service} not found on this system. Aborting.")
+#            return
+#
+#        logger.debug(f"{service} found. Checking status...")
+#
+#        # If DEBUG → dump full status output
+#        if logger.isEnabledFor(logging.DEBUG):
+#            full_status = subprocess.run(
+#                ["systemctl", "status", service],
+#                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+#            )
+#            logger.debug(f"Full systemctl status for {service}:\n{full_status.stdout.strip()}")
+#        else:
+#            # Only check active state
+#            status_check = subprocess.run(
+#                ["systemctl", "is-active", service],
+#                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+#            )
+#            state = status_check.stdout.strip()
+#
+#            if state == "active":
+#                logger.info(f"{service} is running ✅")
+#            else:
+#                logger.warning(f"{service} is NOT running (state={state})")
+#
+#    except subprocess.CalledProcessError as e:
+#        logger.error(f"Error managing {service}: {e.stderr.strip()}")
+
+
+import logging
+from pathlib import Path
+
 def show_status(logger):
     """
-    Show reverse-ssh.service status if present.
-    If log level is DEBUG, dump full `systemctl status` output.
+    If /etc/systemd/system/reverse-ssh.service exists -> treat as server and check reverse-ssh.service.
+    Otherwise -> treat as client and check sshd-remote-mgmt.service (with sudo).
+    DEBUG level dumps full `systemctl status`; otherwise prints a brief active/inactive message.
     """
-    logger.info("Checking the status of the Remote Access Management Service...")
-    service = "reverse-ssh.service"
+    server_marker = Path("/etc/systemd/system/reverse-ssh.service")
+    if server_marker.exists():
+        role = "server"
+        service = "reverse-ssh.service"
+        sudo = ""  # not needed
+    else:
+        role = "client"
+        service = "sshd-remote-mgmt.service"
+        sudo = "sudo "
 
-    logger.debug(f"Checking for {service}...")
+    logger.info(f"Checking the status of the Remote Access Management Service ({role} mode)…")
+    logger.debug(f"Service to check: {service}")
 
     try:
-        # Check if service exists
-        result = subprocess.run(
-            ["systemctl", "list-unit-files", service],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
-        )
-        if service not in result.stdout:
-            logger.error(f"{service} not found on this system. Aborting.")
+        # First, see if systemd knows about the unit
+        listed = run(f"{sudo}systemctl list-unit-files {service}",
+                     check=False, capture_output=True, logger=logger)
+        if service not in listed.stdout:
+            logger.error(f"{service} not found on this system.")
+            # Still attempt a status call for any extra diagnostics
+            diag = run(f"{sudo}systemctl status {service} --no-pager --full",
+                       check=False, capture_output=True, logger=logger)
+            if diag.stdout.strip():
+                logger.debug(diag.stdout.strip())
             return
 
-        logger.debug(f"{service} found. Checking status...")
+        logger.debug(f"{service} found. Checking status…")
 
-        # If DEBUG → dump full status output
         if logger.isEnabledFor(logging.DEBUG):
-            full_status = subprocess.run(
-                ["systemctl", "status", service],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
-            )
-            logger.debug(f"Full systemctl status for {service}:\n{full_status.stdout.strip()}")
+            # Dump full status when in DEBUG
+            full = run(f"{sudo}systemctl status {service} --no-pager --full",
+                       check=False, capture_output=True, logger=logger)
+            logger.debug(f"Full systemctl status for {service}:\n{(full.stdout or '').strip()}")
         else:
-            # Only check active state
-            status_check = subprocess.run(
-                ["systemctl", "is-active", service],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
-            )
-            state = status_check.stdout.strip()
-
+            # Concise state only
+            chk = run(f"{sudo}systemctl is-active {service}",
+                      check=False, capture_output=True, logger=logger)
+            state = (chk.stdout or "").strip()
             if state == "active":
                 logger.info(f"{service} is running ✅")
             else:
-                logger.warning(f"{service} is NOT running (state={state})")
+                logger.warning(f"{service} is NOT running (state={state or 'unknown'})")
 
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Error managing {service}: {e.stderr.strip()}")
+    except Exception as e:
+        logger.error(f"Error checking {service}: {e}")
+
 
 
 
@@ -718,14 +1067,10 @@ def add_ops_user(logger):
         subprocess.run(["sudo", "chmod", "440", sudoers_file], check=True)
         logger.info(f"Sudoers restriction applied in {sudoers_file}")
 
-        # 4. Configure login command
-        bash_profile = Path("/home/ops/.bash_profile")
-        login_cmd = "/usr/local/sbin/mgmt-access.py --help"
-        with open(bash_profile, "a", encoding="utf-8") as f:
-            f.write(f"\n# Auto-run mgmt-access help on login\n{login_cmd}\n")
-        subprocess.run(["sudo", "chown", "ops:ops", str(bash_profile)], check=True)
-        logger.info(f"Configured {bash_profile} to run '{login_cmd}' on login.")
+        # 4. Configure ops login banner 
+        configure_ops_login_banner(logger)
 
+        # All Done, ops user has been created
         logger.info("User 'ops' created and configured successfully.")
 
     except subprocess.CalledProcessError as e:
@@ -1085,7 +1430,7 @@ def install_client(logger):
     # --- gather config ------------------------------
     SERVER_IP = get_persistent_config(logger, "SERVER_IP", "10.20.30.40")  # type: ignore[name-defined]
     CLIENT_SSH_TUNNEL_PORT = str(get_persistent_config(logger, "CLIENT_SSH_TUNNEL_PORT", "9000"))  # type: ignore[name-defined]
-    SSH_ALLOWED_IP = get_persistent_config(logger, "SSH_ALLOWED_IP", "107.21.96.169")  # type: ignore[name-defined]
+    SSH_ALLOWED_IP = get_persistent_config(logger, "SSH_ALLOWED_IP", "20.30.40.50")  # type: ignore[name-defined]
     SERVER_SSH_PUB_KEY = get_persistent_config(logger, "SERVER_SSH_PUB_KEY", "")  # type: ignore[name-defined]
 
     logger.info(f"SERVER_IP={SERVER_IP}, CLIENT_SSH_TUNNEL_PORT={CLIENT_SSH_TUNNEL_PORT}, SSH_ALLOWED_IP={SSH_ALLOWED_IP}")
@@ -1100,6 +1445,7 @@ def install_client(logger):
     configure_ufw_ssh_from_private(logger)
 
     # --- 1) authorized_keys for ops user --------------------------------
+    logger.info("adding ssh authorized_keys for the ops user.")
     ops_home = Path("/home/ops")
     ssh_dir = ops_home / ".ssh"
     auth_keys = ssh_dir / "authorized_keys"
@@ -1111,14 +1457,14 @@ def install_client(logger):
     auth_keys.touch(exist_ok=True)
     
     if SERVER_SSH_PUB_KEY.strip():
-        append_if_missing_line(auth_keys, SERVER_SSH_PUB_KEY.strip())
+        append_if_missing_line(auth_keys, SERVER_SSH_PUB_KEY.strip(), logger)
         os.chmod(auth_keys, 0o600)
     else:
         logger.warning("SERVER_SSH_PUB_KEY is empty; skipping initial authorized_keys append.")
 
     # Optionally import ssh public keys from file(s)
     while True:
-        ans = input("Import additional public keys from a file? [y/N]: ").strip().lower()
+        ans = input("Import additional public keys for the ops user from a file? [y/N]: ").strip().lower()
         if ans != "y":
             break
         path_in = input("Enter the path to the file containing public keys: ").strip()
@@ -1129,7 +1475,7 @@ def install_client(logger):
 
     # Repeatedly prompt for any additional single keys
     while True:
-        ans = input("Do you want to add another public SSH key for 'ops'? [y/N]: ").strip().lower()
+        ans = input("Do you want to add another public SSH key for user 'ops'? [y/N]: ").strip().lower()
         if ans != "y":
             break
     
@@ -1147,7 +1493,7 @@ def install_client(logger):
                 logger.info("Skipped non-standard key format.")
                 continue
         try:
-            append_if_missing_line(auth_keys, key_line)
+            append_if_missing_line(auth_keys, key_line, logger)
             os.chmod(auth_keys, 0o600)
             logger.info("Key added (or already present).")
         except Exception as e:
@@ -1163,26 +1509,11 @@ def install_client(logger):
     except Exception as e:
         logger.warning(f"Could not chown ~/.ssh to ops:ops (non-fatal): {e}")
 
+#    # --- 2) sshd hardening/config -------------------------------------------
+#    harden_sshd(logger, CLIENT_SSH_TUNNEL_PORT, ssh_login_user="ops")
 
-    # --- 2) sshd hardening/config -------------------------------------------
-    logger.info(f"Disabling password access in sshd, key pairs only")
-    sshd_main = "/etc/ssh/sshd_config"
-    sshd_cloudinit = "/etc/ssh/sshd_config.d/50-cloud-init.conf"
-
-    if Path(sshd_cloudinit).exists():
-        replace_or_add_line(sshd_cloudinit, r"^\s*PasswordAuthentication\s+", "PasswordAuthentication no")
-
-    replace_or_add_line(sshd_main, r"^\s*PasswordAuthentication\s+", "PasswordAuthentication no")
-    replace_or_add_line(sshd_main, r"^\s*UsePAM\s+", "UsePAM no")
-    replace_or_add_line(sshd_main, r"^\s*ChallengeResponseAuthentication\s+", "ChallengeResponseAuthentication no")
-    replace_or_add_line(sshd_main, r"^\s*GatewayPorts\s+", "GatewayPorts yes")
-    replace_or_add_line(sshd_main, r"^\s*Port\s+", f"Port {CLIENT_SSH_TUNNEL_PORT}", extra_lines=["Port 22"])
-
-    try:
-        run("sudo systemctl restart ssh")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Failed to restart ssh: {e.stderr.strip()}")
-        raise
+    # --- 2) create a second locked down sshd for use for remote-management---
+    add_locked_down_sshd(logger, CLIENT_SSH_TUNNEL_PORT, ssh_user="ops") 
 
     # --- 3) UFW --------------------------------------------------------------
     #backup the existing iptables rules to /var/backups/iptables 

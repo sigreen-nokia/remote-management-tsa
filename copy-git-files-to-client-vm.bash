@@ -20,6 +20,6 @@ fi
 echo "Using: client ip/fqdn $INPUT_NAME"
 CURRENT_DIR="$PWD"
 #copy just the files we need
-scp ./requirements.txt sgreen@$INPUT_NAME:/home/sgreen/remote-mgmt-tsa/
-scp ./mgmt-access.py sgreen@$INPUT_NAME:/home/sgreen/remote-mgmt-tsa/
+scp ./requirements.txt sgreen@$INPUT_NAME:/home/sgreen/remote-management-tsa/
+scp ./mgmt-access.py sgreen@$INPUT_NAME:/home/sgreen/remote-management-tsa/
 

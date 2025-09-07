@@ -20,6 +20,6 @@ fi
 echo "Using: VLAB $INPUT_NAME"
 CURRENT_DIR="$PWD"
 #copy just the files we need
-scp ./requirements.txt support@$INPUT_NAME:/home/support/remote-mgmt-tsa/
-scp ./mgmt-access.py support@$INPUT_NAME:/home/support/remote-mgmt-tsa/
+scp ./requirements.txt support@$INPUT_NAME:/home/support/remote-management-tsa/
+scp ./mgmt-access.py support@$INPUT_NAME:/home/support/remote-management-tsa/
 

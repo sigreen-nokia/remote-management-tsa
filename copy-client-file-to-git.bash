@@ -1,9 +1,9 @@
 #!/bin/bash
 # File to store the lab name
-LAB_FILE=".lab-name"
+CLIENT_FILE=".client-name"
 # Read the current value if the file exists
-if [[ -f "$LAB_FILE" ]]; then
-    DEFAULT_NAME=$(<"$LAB_FILE")
+if [[ -f "$CLIENT_FILE" ]]; then
+    DEFAULT_NAME=$(<"$CLIENT_FILE")
 else
     DEFAULT_NAME=""
 fi
@@ -14,12 +14,12 @@ if [[ -z "$INPUT_NAME" ]]; then
     INPUT_NAME="$DEFAULT_NAME"
 else
     # Save the new input for next time
-    echo "$INPUT_NAME" > "$LAB_FILE"
+    echo "$INPUT_NAME" > "$CLIENT_FILE"
 fi
 # Print what we’re using
 echo "Using: VLAB $INPUT_NAME"
 CURRENT_DIR="$PWD"
 #copy just the files we need
-scp support@$INPUT_NAME:/home/support/remote-management-tsa/requirements.txt . 
-scp support@$INPUT_NAME:/home/support/remote-management-tsa/mgmt-access.py support@$INPUT_NAME:/home/support/remote-management-tsa/mgmt-access.py .
+scp sgreen@$INPUT_NAME:/home/sgreen/remote-management-tsa/requirements.txt . 
+scp sgreen@$INPUT_NAME:/home/sgreen/remote-management-tsa/mgmt-access.py sgreen@$INPUT_NAME:/home/sgreen/remote-management-tsa/mgmt-access.py .
 
