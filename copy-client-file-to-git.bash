@@ -17,7 +17,7 @@ else
     echo "$INPUT_NAME" > "$CLIENT_FILE"
 fi
 # Print what we’re using
-echo "Using: VLAB $INPUT_NAME"
+echo "Using: client $INPUT_NAME"
 CURRENT_DIR="$PWD"
 #copy just the files we need
 scp sgreen@$INPUT_NAME:/home/sgreen/remote-management-tsa/requirements.txt . 

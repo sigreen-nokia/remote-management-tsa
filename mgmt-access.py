@@ -417,6 +417,27 @@ def backup_file(p, logger):
             logger.warning(f"Could not backup {src}: {e}")
 
 
+def _as_port(logger, name, value, default_for_msg=None):
+    """
+    Coerce a string->int port, with friendly error if bad.
+    Returns int in [1..65535].
+    """
+    s = str(value).strip()
+    try:
+        p = int(s)
+    except ValueError:
+        msg = f"Invalid port for {name!s}: {s!r}"
+        if default_for_msg is not None:
+            msg += f" (expected a number like {default_for_msg})"
+        logger.error(msg)
+        raise
+    if not (1 <= p <= 65535):
+        logger.error(f"Port out of range for {name}: {p} (must be 1..65535)")
+        raise ValueError(f"bad port {p}")
+    return p
+
+
+
 #def configure_ops_login_banner(logger):
 #    server_marker = Path("/etc/systemd/system/reverse-ssh.service")
 #    if not server_marker.exists():
@@ -1243,14 +1264,11 @@ def install_server(logger):
     """
     logger.debug(f"install_server():")
     #prompt for each of the variables, and store localy as .file so th enext run has good default
-    CLIENT_SSH_TUNNEL_PORT  = get_persistent_config(logger, "CLIENT_SSH_TUNNEL_PORT", "9000")
-#    CLIENT_SSH_PORT_FORWARD = get_persistent_config(logger, "CLIENT_SSH_PORT_FORWARD", "9001")
-    CLIENT_SSH_PORT_FORWARD = CLIENT_SSH_PORT_FORWARD + 1 
-#    CLIENT_UI_PORT_FORWARD  = get_persistent_config(logger, "CLIENT_UI_PORT_FORWARD", "9002")
-    CLIENT_UI_PORT_FORWARD  = CLIENT_SSH_PORT_FORWARD + 2
+    CLIENT_SSH_TUNNEL_PORT  = int(get_persistent_config(logger, "CLIENT_SSH_TUNNEL_PORT", "9000"))
+    CLIENT_SSH_PORT_FORWARD = CLIENT_SSH_TUNNEL_PORT + 1
+    CLIENT_UI_PORT_FORWARD  = CLIENT_SSH_TUNNEL_PORT + 2
     logger.info(f"SSH forwarding will use the +1 port: {CLIENT_SSH_PORT_FORWARD}")
     logger.info(f"UI forwarding will use the +2 port: {CLIENT_UI_PORT_FORWARD}")
- 
     CLIENT_FQDN_OR_IP             = get_persistent_config(logger, "CLIENT_FQDN_OR_IP", "10.20.30.40")
 
     # The host alias used by autossh (matches the Host entry we write below).
@@ -1471,11 +1489,11 @@ def install_client(logger):
 #            logger.info(f"No change needed in {p} for `{replacement}`")
 
 
-    # --- gather config ------------------------------
+    #prompt for each of the variables, and store localy as .file so th enext run has good default
     SERVER_IP = get_persistent_config(logger, "SERVER_IP", "10.20.30.40")  # type: ignore[name-defined]
-    CLIENT_SSH_TUNNEL_PORT = str(get_persistent_config(logger, "CLIENT_SSH_TUNNEL_PORT", "9000"))  # type: ignore[name-defined]
-    CLIENT_SSH_PORT_FORWARD = CLIENT_SSH_PORT_FORWARD + 1
-    CLIENT_UI_PORT_FORWARD  = CLIENT_SSH_PORT_FORWARD + 2
+    CLIENT_SSH_TUNNEL_PORT  = int(get_persistent_config(logger, "CLIENT_SSH_TUNNEL_PORT", "9000"))
+    CLIENT_SSH_PORT_FORWARD = CLIENT_SSH_TUNNEL_PORT + 1
+    CLIENT_UI_PORT_FORWARD  = CLIENT_SSH_TUNNEL_PORT + 2
     logger.info(f"SSH forwarding will use the +1 port: {CLIENT_SSH_PORT_FORWARD}")
     logger.info(f"UI forwarding will use the +2 port: {CLIENT_UI_PORT_FORWARD}")
     SSH_ALLOWED_IP = get_persistent_config(logger, "SSH_ALLOWED_IP", "20.30.40.50")  # type: ignore[name-defined]
