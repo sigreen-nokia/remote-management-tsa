@@ -417,10 +417,50 @@ def backup_file(p, logger):
             logger.warning(f"Could not backup {src}: {e}")
 
 
+#def configure_ops_login_banner(logger):
+#    server_marker = Path("/etc/systemd/system/reverse-ssh.service")
+#    if not server_marker.exists():
+#        logger.info("reverse-ssh.service not present; skipping ops bash_profile modification (not a server).")
+#        return
+#
+#    bash_profile = Path("/home/ops/.bash_profile")
+#    login_cmd = "sudo /usr/local/sbin/mgmt-access.py --status"
+#    header = "# Auto-run mgmt-access status on login"
+#
+#    # Ensure file exists
+#    bash_profile.parent.mkdir(parents=True, exist_ok=True)
+#    if not bash_profile.exists():
+#        bash_profile.touch(mode=0o644, exist_ok=True)
+#
+#    # Append only if not already present
+#    try:
+#        existing = bash_profile.read_text(encoding="utf-8")
+#    except Exception:
+#        existing = ""
+#
+#    if login_cmd in existing:
+#        logger.debug(f"'{login_cmd}' already present in {bash_profile}; no change.")
+#    else:
+#        with open(bash_profile, "a", encoding="utf-8") as f:
+#            if not existing.endswith("\n"):
+#                f.write("\n")
+#            f.write(f"\n{header}\n{login_cmd}\n")
+#        logger.info(f"Configured {bash_profile} to run '{login_cmd}' on login.")
+#
+#    # Best-effort ownership
+#    try:
+#        run(f"sudo chown ops:ops {bash_profile}", check=False, logger=logger) 
+#    except subprocess.CalledProcessError as e:
+#        logger.warning(f"Could not chown {bash_profile} to ops:ops (non-fatal): {e}")
+
 def configure_ops_login_banner(logger):
+    """
+    Server-only: append an auto-status line to ~ops/.bash_profile.
+    If /etc/systemd/system/reverse-ssh.service is absent (client), do nothing.
+    """
     server_marker = Path("/etc/systemd/system/reverse-ssh.service")
     if not server_marker.exists():
-        logger.info("reverse-ssh.service not present; skipping ops bash_profile modification (not a server).")
+        logger.info("No reverse-ssh.service marker detected → client mode; leaving /home/ops/.bash_profile unchanged.")
         return
 
     bash_profile = Path("/home/ops/.bash_profile")
@@ -449,10 +489,9 @@ def configure_ops_login_banner(logger):
 
     # Best-effort ownership
     try:
-        run(f"sudo chown ops:ops {bash_profile}", check=False, logger=logger) 
+        run(f"sudo chown ops:ops {bash_profile}", check=False, logger=logger)
     except subprocess.CalledProcessError as e:
         logger.warning(f"Could not chown {bash_profile} to ops:ops (non-fatal): {e}")
-
 
 
 
@@ -1269,7 +1308,7 @@ def install_server(logger):
 
         [Service]
         User=support
-        ExecStart=/usr/bin/autossh -M 0 -N -q -o "ServerAliveInterval=60" -o "ServerAliveCountMax=3" {AUTOSSH_HOST_ALIAS}
+        ExecStart=/usr/bin/autossh -M 0 -N -q -o "ServerAliveInterval=60" -o "ServerAliveCountMax=3" "StrictHostKeyChecking=no" {AUTOSSH_HOST_ALIAS}
         ExecStop=/usr/bin/killall -s KILL autossh
         Restart=always
         RestartSec=3
