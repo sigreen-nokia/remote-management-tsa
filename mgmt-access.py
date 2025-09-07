@@ -259,6 +259,51 @@ def _looks_like_openssh_pubkey(line: str) -> bool:
     return keytype in allowed
 
 
+def _import_keys_from_file(auth_keys: Path, file_path: str, logger):
+    """Read a file of public keys and append valid lines if missing."""
+    p = Path(os.path.expanduser(file_path)).resolve()
+    if not p.exists():
+        logger.error(f"Key file not found: {p}")
+        return
+    if not p.is_file():
+        logger.error(f"Not a file: {p}")
+        return
+
+    added = skipped = invalid = 0
+
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if not _looks_like_openssh_pubkey(line):
+                    invalid += 1
+                    logger.warning(f"Skipping non-OpenSSH-looking line from {p}: {line[:40]}...")
+                    continue
+                try:
+                    before = auth_keys.read_text(encoding="utf-8") if auth_keys.exists() else ""
+                    append_if_missing_line(auth_keys, line)
+                    after = auth_keys.read_text(encoding="utf-8")
+                    if after != before:
+                        added += 1
+                    else:
+                        skipped += 1
+                except Exception as e:
+                    logger.error(f"Failed to append key from {p}: {e}")
+    except Exception as e:
+        logger.error(f"Error reading {p}: {e}")
+        return
+
+    try:
+        os.chmod(auth_keys, 0o600)
+    except Exception as e:
+        logger.warning(f"Could not chmod {auth_keys} to 600: {e}")
+
+    logger.info(f"Imported from {p}: added={added}, skipped-duplicates={skipped}, invalid-format={invalid}")
+
+
+
 def configure_ufw_ssh_from_private(logger):
     """
     Prompt for each RFC1918 subnet and, if confirmed, allow SSH (22/tcp) from it via UFW.
@@ -940,7 +985,6 @@ def install_client(logger):
     """
     Prepare a client host for secure reverse-SSH access.
 
-    Mirrors the original bash:
       - Reads persisted config via get_persistent_config (which handles prompting/persistence)
       - Appends server's SSH public key to /home/support/.ssh/authorized_keys
       - Hardens sshd: disable password/PAM, disable challenge-response, enable GatewayPorts, set Port=<CLIENT_SSH_TUNNEL_PORT>
@@ -1042,7 +1086,7 @@ def install_client(logger):
     SERVER_IP = get_persistent_config(logger, "SERVER_IP", "10.20.30.40")  # type: ignore[name-defined]
     CLIENT_SSH_TUNNEL_PORT = str(get_persistent_config(logger, "CLIENT_SSH_TUNNEL_PORT", "9000"))  # type: ignore[name-defined]
     SSH_ALLOWED_IP = get_persistent_config(logger, "SSH_ALLOWED_IP", "107.21.96.169")  # type: ignore[name-defined]
-    SSH_PUB_KEY = get_persistent_config(logger, "SSH_PUB_KEY", "")  # type: ignore[name-defined]
+    SERVER_SSH_PUB_KEY = get_persistent_config(logger, "SERVER_SSH_PUB_KEY", "")  # type: ignore[name-defined]
 
     logger.info(f"SERVER_IP={SERVER_IP}, CLIENT_SSH_TUNNEL_PORT={CLIENT_SSH_TUNNEL_PORT}, SSH_ALLOWED_IP={SSH_ALLOWED_IP}")
 
@@ -1066,12 +1110,24 @@ def install_client(logger):
     # Ensure the file exists before appending
     auth_keys.touch(exist_ok=True)
     
-    if SSH_PUB_KEY.strip():
-        append_if_missing_line(auth_keys, SSH_PUB_KEY.strip())
+    if SERVER_SSH_PUB_KEY.strip():
+        append_if_missing_line(auth_keys, SERVER_SSH_PUB_KEY.strip())
         os.chmod(auth_keys, 0o600)
     else:
-        logger.warning("SSH_PUB_KEY is empty; skipping initial authorized_keys append.")
-    # Repeatedly prompt for any additional keys
+        logger.warning("SERVER_SSH_PUB_KEY is empty; skipping initial authorized_keys append.")
+
+    # Optionally import ssh public keys from file(s)
+    while True:
+        ans = input("Import additional public keys from a file? [y/N]: ").strip().lower()
+        if ans != "y":
+            break
+        path_in = input("Enter the path to the file containing public keys: ").strip()
+        if not path_in:
+            logger.warning("No path entered; skipping.")
+            continue
+        _import_keys_from_file(auth_keys, path_in, logger)
+
+    # Repeatedly prompt for any additional single keys
     while True:
         ans = input("Do you want to add another public SSH key for 'ops'? [y/N]: ").strip().lower()
         if ans != "y":
@@ -1109,6 +1165,7 @@ def install_client(logger):
 
 
     # --- 2) sshd hardening/config -------------------------------------------
+    logger.info(f"Disabling password access in sshd, key pairs only")
     sshd_main = "/etc/ssh/sshd_config"
     sshd_cloudinit = "/etc/ssh/sshd_config.d/50-cloud-init.conf"
 
