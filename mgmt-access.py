@@ -1244,8 +1244,13 @@ def install_server(logger):
     logger.debug(f"install_server():")
     #prompt for each of the variables, and store localy as .file so th enext run has good default
     CLIENT_SSH_TUNNEL_PORT  = get_persistent_config(logger, "CLIENT_SSH_TUNNEL_PORT", "9000")
-    CLIENT_SSH_PORT_FORWARD = get_persistent_config(logger, "CLIENT_SSH_PORT_FORWARD", "9001")
-    CLIENT_UI_PORT_FORWARD  = get_persistent_config(logger, "CLIENT_UI_PORT_FORWARD", "9002")
+#    CLIENT_SSH_PORT_FORWARD = get_persistent_config(logger, "CLIENT_SSH_PORT_FORWARD", "9001")
+    CLIENT_SSH_PORT_FORWARD = CLIENT_SSH_PORT_FORWARD + 1 
+#    CLIENT_UI_PORT_FORWARD  = get_persistent_config(logger, "CLIENT_UI_PORT_FORWARD", "9002")
+    CLIENT_UI_PORT_FORWARD  = CLIENT_SSH_PORT_FORWARD + 2
+    logger.info(f"SSH forwarding will use the +1 port: {CLIENT_SSH_PORT_FORWARD}")
+    logger.info(f"UI forwarding will use the +2 port: {CLIENT_UI_PORT_FORWARD}")
+ 
     CLIENT_FQDN_OR_IP             = get_persistent_config(logger, "CLIENT_FQDN_OR_IP", "10.20.30.40")
 
     # The host alias used by autossh (matches the Host entry we write below).
@@ -1373,7 +1378,7 @@ def install_client(logger):
       - Appends server's SSH public key to /home/support/.ssh/authorized_keys
       - Hardens sshd: disable password/PAM, disable challenge-response, enable GatewayPorts, set Port=<CLIENT_SSH_TUNNEL_PORT>
       - Restarts ssh service
-      - Installs & configures UFW rules (22 from SSH_ALLOWED_IP; 9000..9002 from SERVER_IP)
+      - Installs & configures UFW rules (22 from SSH_ALLOWED_IP; and 3 ports for access and forwarding)
       - Installs & configures fail2ban using jail.local (banaction=ufw, port=<CLIENT_SSH_TUNNEL_PORT>)
     """
 
@@ -1469,6 +1474,10 @@ def install_client(logger):
     # --- gather config ------------------------------
     SERVER_IP = get_persistent_config(logger, "SERVER_IP", "10.20.30.40")  # type: ignore[name-defined]
     CLIENT_SSH_TUNNEL_PORT = str(get_persistent_config(logger, "CLIENT_SSH_TUNNEL_PORT", "9000"))  # type: ignore[name-defined]
+    CLIENT_SSH_PORT_FORWARD = CLIENT_SSH_PORT_FORWARD + 1
+    CLIENT_UI_PORT_FORWARD  = CLIENT_SSH_PORT_FORWARD + 2
+    logger.info(f"SSH forwarding will use the +1 port: {CLIENT_SSH_PORT_FORWARD}")
+    logger.info(f"UI forwarding will use the +2 port: {CLIENT_UI_PORT_FORWARD}")
     SSH_ALLOWED_IP = get_persistent_config(logger, "SSH_ALLOWED_IP", "20.30.40.50")  # type: ignore[name-defined]
     SERVER_SSH_PUB_KEY = get_persistent_config(logger, "SERVER_SSH_PUB_KEY", "")  # type: ignore[name-defined]
 
@@ -1559,7 +1568,7 @@ def install_client(logger):
     backup_iptables(logger)
     ensure_pkg("ufw", logger)
     run(f"sudo ufw allow from {SSH_ALLOWED_IP} to any port 22 proto tcp")
-    for p in ("9000", "9001", "9002"):
+    for p in (CLIENT_SSH_TUNNEL_PORT, CLIENT_SSH_PORT_FORWARD, CLIENT_UI_PORT_FORWARD):
         run(f"sudo ufw allow from {SERVER_IP} to any port {p} proto tcp")
     run("echo 'y' | sudo ufw enable", check=False)
     run("sudo ufw status", check=False)
