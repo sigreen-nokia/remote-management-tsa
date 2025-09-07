@@ -113,6 +113,197 @@ def check_running_as_root(logger=None):
         if logger:
             logger.debug("Confirmed running as root (uid=0).")
 
+#used in install_client and install_server in a slightly different way
+def run(cmd, check=True, capture_output=False, logger=None):
+    """
+    Wrapper for running shell commands.
+
+    - Uses run_cmd(logger, cmd, check, capture_output) if defined in the module.
+    - Falls back to subprocess.run().
+    - Accepts str or list for cmd.
+    - Provides optional capture_output (stdout/stderr).
+    - Logs at DEBUG/INFO if logger is provided.
+    """
+    # Prefer custom run_cmd() if present
+    try:
+        if "run_cmd" in globals():
+            return run_cmd(logger, cmd, check=check, capture_output=capture_output)  # type: ignore[name-defined]
+    except Exception:
+        pass
+
+    # Fallback: subprocess.run
+    if logger:
+        level = logger.debug if capture_output else logger.info
+        level(f"RUN: {cmd}")
+
+    # Decide how to run command
+    if isinstance(cmd, str):
+        cmd_list = shlex.split(cmd)
+    else:
+        cmd_list = cmd
+
+    return subprocess.run(
+        cmd_list,
+        check=check,
+        capture_output=capture_output,
+        text=True,
+    )
+
+
+def backup_file(p):
+    """Backup config file p if it exists, to <p>.bak-YYYYmmdd-HHMMSS"""
+    src = Path(p)
+    if src.exists():
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        dst = src.with_suffix(src.suffix + f".bak-{ts}")
+        try:
+            shutil.copy2(src, dst)
+            logger.info(f"Note: I have Backed up file {src} before modifying to file {dst}")
+        except Exception as e:
+            logger.warning(f"Could not backup {src}: {e}")
+
+
+
+def replace_or_add_line(p, key_regex, replacement, extra_lines=None):
+    """                 
+    Replace first line matching key_regex with replacement; if none matched, append replacement.
+    Optionally also ensure extra_lines (list of lines) appear *after* replacement.
+    """
+    backup_file(p)  # backup before modifying
+    content = read_text(p)
+    lines = content.splitlines()
+    pat = re.compile(key_regex)
+    replaced = False
+    for i, line in enumerate(lines): 
+        if pat.search(line): 
+            if lines[i].strip() != replacement.strip():
+                lines[i] = replacement
+            replaced = True
+            # insert extra lines right after
+            if extra_lines:
+                for extra in extra_lines:
+                    if extra not in lines[i+1:i+2+len(extra_lines)]:  # avoid duplicates
+                        lines.insert(i + 1, extra)
+            break
+    if not replaced:
+        lines.append(replacement)
+        if extra_lines:
+            for extra in extra_lines:
+                if extra not in lines:
+                    lines.append(extra)
+    new = "\n".join(lines) + "\n"
+    if new != content:
+        write_text(p, new)
+        logger.info(f"Updated {p}: set `{replacement}` (+ extras)")
+    else:
+        logger.info(f"No change needed in {p} for `{replacement}`")
+
+def read_text(p):
+    try:
+        return Path(p).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+def write_text(p, content, mode=0o644):
+    Path(p).parent.mkdir(parents=True, exist_ok=True)
+    Path(p).write_text(content, encoding="utf-8")
+    os.chmod(p, mode)
+
+def append_if_missing_line(p, line):
+    current = read_text(p)
+    needle = line.strip()
+    if needle and needle not in current:
+        with open(p, "a", encoding="utf-8") as fh:
+            if current and not current.endswith("\n"):
+                fh.write("\n")
+            fh.write(needle + "\n")
+        logger.info(f"Appended to {p}")
+    else:
+        logger.info(f"Line already present in {p}")
+
+
+def check_ops_user(logger):
+    """
+    Ensure the 'ops' user exists and has /home/ops present.
+    Exit with error if not.
+    """
+    try:
+        pwd.getpwnam("ops")  # raises KeyError if user doesn't exist
+    except KeyError:
+        logger.error("The user 'ops' does not exist on this system. Please run --add-ops-user first")
+        sys.exit(1)
+
+    home_dir = "/home/ops"
+    if not os.path.isdir(home_dir):
+        logger.error(f"Home directory {home_dir} does not exist for user 'ops'. Please run --add-ops-user first")
+        sys.exit(1)
+
+    logger.info("User 'ops' exists and /home/ops is present ✅")
+
+
+def _looks_like_openssh_pubkey(line: str) -> bool:
+    parts = line.strip().split()
+    if len(parts) < 2:
+        return False
+    keytype = parts[0]
+    allowed = {
+        "ssh-ed25519",
+        "ssh-rsa",
+        "ecdsa-sha2-nistp256",
+        "ecdsa-sha2-nistp384",
+        "ecdsa-sha2-nistp521",
+        "sk-ssh-ed25519@openssh.com",
+        "sk-ecdsa-sha2-nistp256@openssh.com",
+    }
+    return keytype in allowed
+
+
+def configure_ufw_ssh_from_private(logger):
+    """
+    Prompt for each RFC1918 subnet and, if confirmed, allow SSH (22/tcp) from it via UFW.
+    Uses existing run() helper.
+    """
+    private_subnets = [
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+    ]
+
+    # Check if ufw exists
+    try:
+        result = run("ufw --version", check=False)
+        if result.returncode != 0:
+            logger.error("UFW does not appear to be installed. Install it with: sudo apt-get install ufw")
+            return
+    except Exception as e:
+        logger.error(f"Failed to check UFW availability: {e}")
+        return
+
+    logger.info("Configuring UFW to allow SSH (tcp/22) from selected private IPv4 ranges.")
+
+    for cidr in private_subnets:
+        ans = input(f"Allow SSH (tcp/22) from {cidr}? [y/N]: ").strip().lower()
+        if ans == "y":
+            cmd = f"sudo ufw allow from {cidr} to any port 22 proto tcp"
+            logger.info(f"Adding rule: {cmd}")
+            run(cmd, check=True)
+        else:
+            logger.info(f"Skipped {cidr}")
+
+    # Show current rules
+    run("sudo ufw status numbered", check=False)
+
+    # Check if ufw is active
+    result = run("sudo ufw status", check=False)
+    if "inactive" in result.stdout.lower():
+        ans = input("UFW is inactive. Enable it now? [y/N]: ").strip().lower()
+        if ans == "y":
+            logger.info("Enabling UFW…")
+            run("sudo ufw enable", check=True)
+        else:
+            logger.warning("UFW remains inactive. Rules will not take effect until UFW is enabled.")
+
+
 def get_persistent_config(logger, varname, default, prompt=True, cast=None):
     """
     Get a persistent config value for `varname`.
@@ -638,14 +829,15 @@ def install_server(logger):
     unit_path    = "/etc/systemd/system/reverse-ssh.service"
 
     # --- Helpers ---
-    def run(cmd, check=True, capture_output=False):
-        logger.debug(f"Running: {cmd}")
-        return subprocess.run(
-            cmd if isinstance(cmd, list) else shlex.split(cmd),
-            check=check,
-            capture_output=capture_output,
-            text=True,
-        )
+# moved out 
+#    def run(cmd, check=True, capture_output=False):
+#        logger.debug(f"Running: {cmd}")
+#        return subprocess.run(
+#            cmd if isinstance(cmd, list) else shlex.split(cmd),
+#            check=check,
+#            capture_output=capture_output,
+#            text=True,
+#        )
 
     def write_file_with_sudo(dest_path, content):
         # Use a here-doc via tee to avoid worrying about root file perms.
@@ -667,7 +859,7 @@ def install_server(logger):
         Host {CLIENT_FQDN_OR_IP}
             HostName {CLIENT_FQDN_OR_IP}
             IdentityFile /home/support/.ssh/id_rsa
-            User support
+            User ops 
             Port {CLIENT_SSH_TUNNEL_PORT}
             RemoteForward {CLIENT_SSH_PORT_FORWARD} 127.0.0.1:22
             RemoteForward {CLIENT_UI_PORT_FORWARD} 127.0.0.1:443
@@ -762,92 +954,93 @@ def install_client(logger):
     # --- safety checks ------------------------------------------------------
     check_supported_ubuntu(logger)
     check_not_dcu(logger)
+    check_ops_user(logger)
+
+#    # --- Helpers--------------------------------
+#    def run(cmd, check=True):
+#        """Prefer your run_cmd() if present; else subprocess."""
+#        try:
+#            # If your module defines run_cmd(logger, cmd, check=True), use it
+#            return run_cmd(logger, cmd, check=check)  # type: ignore[name-defined]
+#        except Exception:
+#            logger.info(f"RUN: {cmd}")
+#            return subprocess.run(
+#                cmd, shell=True, check=check,
+#                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+#            )
+
+#    def read_text(p):
+#        try:
+#            return Path(p).read_text(encoding="utf-8")
+#        except FileNotFoundError:
+#            return ""
+#
+#    def write_text(p, content, mode=0o644):
+#        Path(p).parent.mkdir(parents=True, exist_ok=True)
+#        Path(p).write_text(content, encoding="utf-8")
+#        os.chmod(p, mode)
+#
+#    def append_if_missing_line(p, line):
+#        current = read_text(p)
+#        needle = line.strip()
+#        if needle and needle not in current:
+#            with open(p, "a", encoding="utf-8") as fh:
+#                if current and not current.endswith("\n"):
+#                    fh.write("\n")
+#                fh.write(needle + "\n")
+#            logger.info(f"Appended to {p}")
+#        else:
+#            logger.info(f"Line already present in {p}")
 
 
-    # --- helpers--------------------------------
-    def run(cmd, check=True):
-        """Prefer your run_cmd() if present; else subprocess."""
-        try:
-            # If your module defines run_cmd(logger, cmd, check=True), use it
-            return run_cmd(logger, cmd, check=check)  # type: ignore[name-defined]
-        except Exception:
-            logger.info(f"RUN: {cmd}")
-            return subprocess.run(
-                cmd, shell=True, check=check,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-            )
+#    def backup_file(p):
+#        """Backup config file p if it exists, to <p>.bak-YYYYmmdd-HHMMSS"""
+#        src = Path(p)
+#        if src.exists():
+#            ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+#            dst = src.with_suffix(src.suffix + f".bak-{ts}")
+#            try:
+#                shutil.copy2(src, dst)
+#                logger.info(f"Note: I have Backed up file {src} before modifying to file {dst}")
+#            except Exception as e:
+#                logger.warning(f"Could not backup {src}: {e}")
 
-    def read_text(p):
-        try:
-            return Path(p).read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return ""
-
-    def write_text(p, content, mode=0o644):
-        Path(p).parent.mkdir(parents=True, exist_ok=True)
-        Path(p).write_text(content, encoding="utf-8")
-        os.chmod(p, mode)
-
-    def append_if_missing_line(p, line):
-        current = read_text(p)
-        needle = line.strip()
-        if needle and needle not in current:
-            with open(p, "a", encoding="utf-8") as fh:
-                if current and not current.endswith("\n"):
-                    fh.write("\n")
-                fh.write(needle + "\n")
-            logger.info(f"Appended to {p}")
-        else:
-            logger.info(f"Line already present in {p}")
-
-    def backup_file(p):
-        """Backup config file p if it exists, to <p>.bak-YYYYmmdd-HHMMSS"""
-        src = Path(p)
-        if src.exists():
-            ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-            dst = src.with_suffix(src.suffix + f".bak-{ts}")
-            try:
-                shutil.copy2(src, dst)
-                logger.info(f"Note: I have Backed up file {src} before modifying to file {dst}")
-            except Exception as e:
-                logger.warning(f"Could not backup {src}: {e}")
-
-    def replace_or_add_line(p, key_regex, replacement, extra_lines=None):
-        """
-        Replace first line matching key_regex with replacement; if none matched, append replacement.
-        Optionally also ensure extra_lines (list of lines) appear *after* replacement.
-        """
-        backup_file(p)  # backup before modifying
-        content = read_text(p)
-        lines = content.splitlines()
-        pat = re.compile(key_regex)
-        replaced = False
-        for i, line in enumerate(lines):
-            if pat.search(line):
-                if lines[i].strip() != replacement.strip():
-                    lines[i] = replacement
-                replaced = True
-                # insert extra lines right after
-                if extra_lines:
-                    for extra in extra_lines:
-                        if extra not in lines[i+1:i+2+len(extra_lines)]:  # avoid duplicates
-                            lines.insert(i + 1, extra)
-                break
-        if not replaced:
-            lines.append(replacement)
-            if extra_lines:
-                for extra in extra_lines:
-                    if extra not in lines:
-                        lines.append(extra)
-        new = "\n".join(lines) + "\n"
-        if new != content:
-            write_text(p, new)
-            logger.info(f"Updated {p}: set `{replacement}` (+ extras)")
-        else:
-            logger.info(f"No change needed in {p} for `{replacement}`")
+#    def replace_or_add_line(p, key_regex, replacement, extra_lines=None):
+#        """
+#        Replace first line matching key_regex with replacement; if none matched, append replacement.
+#        Optionally also ensure extra_lines (list of lines) appear *after* replacement.
+#        """
+#        backup_file(p)  # backup before modifying
+#        content = read_text(p)
+#        lines = content.splitlines()
+#        pat = re.compile(key_regex)
+#        replaced = False
+#        for i, line in enumerate(lines):
+#            if pat.search(line):
+#                if lines[i].strip() != replacement.strip():
+#                    lines[i] = replacement
+#                replaced = True
+#                # insert extra lines right after
+#                if extra_lines:
+#                    for extra in extra_lines:
+#                        if extra not in lines[i+1:i+2+len(extra_lines)]:  # avoid duplicates
+#                            lines.insert(i + 1, extra)
+#                break
+#        if not replaced:
+#            lines.append(replacement)
+#            if extra_lines:
+#                for extra in extra_lines:
+#                    if extra not in lines:
+#                        lines.append(extra)
+#        new = "\n".join(lines) + "\n"
+#        if new != content:
+#            write_text(p, new)
+#            logger.info(f"Updated {p}: set `{replacement}` (+ extras)")
+#        else:
+#            logger.info(f"No change needed in {p} for `{replacement}`")
 
 
-    # --- gather config via your existing helper ------------------------------
+    # --- gather config ------------------------------
     SERVER_IP = get_persistent_config(logger, "SERVER_IP", "10.20.30.40")  # type: ignore[name-defined]
     CLIENT_SSH_TUNNEL_PORT = str(get_persistent_config(logger, "CLIENT_SSH_TUNNEL_PORT", "9000"))  # type: ignore[name-defined]
     SSH_ALLOWED_IP = get_persistent_config(logger, "SSH_ALLOWED_IP", "107.21.96.169")  # type: ignore[name-defined]
@@ -855,33 +1048,67 @@ def install_client(logger):
 
     logger.info(f"SERVER_IP={SERVER_IP}, CLIENT_SSH_TUNNEL_PORT={CLIENT_SSH_TUNNEL_PORT}, SSH_ALLOWED_IP={SSH_ALLOWED_IP}")
 
-    # -- let the user know we are about to lock down ssh ----
-    logger.info(f"Warning: On completion ssh will be locked down in ufw to only allow the following source addresses")
+    # -- Ask the user if they would like private address space added to ufw ----
+    # -- If not we will lock it down so only the server and SSH_ALLOWED_IP can access it ----
+
+    logger.info(f"By default, ssh will be locked down to only allow  ssh port 22 access from the following source addresses")
     logger.info(f"from the CLIENT_SSH_TUNNEL_PORT {CLIENT_SSH_TUNNEL_PORT} on port 22")
     logger.info(f"from the SERVER_IP {SERVER_IP} on port {CLIENT_SSH_TUNNEL_PORT}")
+    logger.info(f"Would you like me to enable ssh from other private ipv4 subnets to help with your testing (these ufw rules should be removed once finished)")
+    configure_ufw_ssh_from_private(logger)
 
-    # --- 1) authorized_keys for support user --------------------------------
-    support_home = Path("/home/support")
-    ssh_dir = support_home / ".ssh"
+    # --- 1) authorized_keys for ops user --------------------------------
+    ops_home = Path("/home/ops")
+    ssh_dir = ops_home / ".ssh"
     auth_keys = ssh_dir / "authorized_keys"
-
+    
     ssh_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(ssh_dir, 0o700)
-
+    
+    # Ensure the file exists before appending
+    auth_keys.touch(exist_ok=True)
+    
     if SSH_PUB_KEY.strip():
         append_if_missing_line(auth_keys, SSH_PUB_KEY.strip())
         os.chmod(auth_keys, 0o600)
-        # best-effort ownership to support:support
-        try:
-            import pwd, grp
-            uid = pwd.getpwnam("support").pw_uid
-            gid = grp.getgrnam("support").gr_gid
-            os.chown(ssh_dir, uid, gid)
-            os.chown(auth_keys, uid, gid)
-        except Exception as e:
-            logger.warning(f"Could not chown ~/.ssh to support:support (non-fatal): {e}")
     else:
-        logger.warning("SSH_PUB_KEY is empty; skipping authorized_keys append.")
+        logger.warning("SSH_PUB_KEY is empty; skipping initial authorized_keys append.")
+    # Repeatedly prompt for any additional keys
+    while True:
+        ans = input("Do you want to add another public SSH key for 'ops'? [y/N]: ").strip().lower()
+        if ans != "y":
+            break
+    
+        key_line = input(
+            "Paste the full OpenSSH public key line (e.g. 'ssh-ed25519 AAAAC3... comment'):\n"
+        ).strip()
+    
+        if not key_line:
+            logger.warning("Empty input; not adding a key.")
+            continue
+    
+        if not _looks_like_openssh_pubkey(key_line):
+            confirm = input("That doesn't look like a standard OpenSSH public key. Add anyway? [y/N]: ").strip().lower()
+            if confirm != "y":
+                logger.info("Skipped non-standard key format.")
+                continue
+        try:
+            append_if_missing_line(auth_keys, key_line)
+            os.chmod(auth_keys, 0o600)
+            logger.info("Key added (or already present).")
+        except Exception as e:
+            logger.error(f"Failed to append key: {e}")
+    
+    # best-effort ownership to ops:ops
+    try:
+        import pwd, grp
+        uid = pwd.getpwnam("ops").pw_uid
+        gid = grp.getgrnam("ops").gr_gid
+        os.chown(ssh_dir, uid, gid)
+        os.chown(auth_keys, uid, gid)
+    except Exception as e:
+        logger.warning(f"Could not chown ~/.ssh to ops:ops (non-fatal): {e}")
+
 
     # --- 2) sshd hardening/config -------------------------------------------
     sshd_main = "/etc/ssh/sshd_config"
