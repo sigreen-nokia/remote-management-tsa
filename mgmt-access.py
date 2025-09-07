@@ -17,6 +17,7 @@ from pathlib import Path
 import re
 import datetime
 import getpass
+import pwd
 
 def setup_logger(level=logging.INFO):
     # Don’t let logging print handler tracebacks on emit errors
@@ -442,9 +443,6 @@ def turn_off(logger):
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Error managing {service}: {e.stderr.strip()}")
-
-import subprocess
-import logging
 
 def show_status(logger):
     """

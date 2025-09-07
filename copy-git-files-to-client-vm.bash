@@ -17,10 +17,9 @@ else
     echo "$INPUT_NAME" > "$CLIENT_FILE"
 fi
 # Print what we’re using
-echo "Using: VLAB $INPUT_NAME"
+echo "Using: client ip/fqdn $INPUT_NAME"
 CURRENT_DIR="$PWD"
 #copy just the files we need
-ssh sgreen@$INPUT_NAME mkdir /home/sgreen/remote-mgmt-tsa
 scp ./requirements.txt sgreen@$INPUT_NAME:/home/sgreen/remote-mgmt-tsa/
 scp ./mgmt-access.py sgreen@$INPUT_NAME:/home/sgreen/remote-mgmt-tsa/
 
