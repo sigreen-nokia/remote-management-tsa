@@ -19,6 +19,8 @@ import datetime
 import getpass
 import pwd
 import shlex
+import ipaddress
+
 
 def setup_logger(level=logging.INFO):
     # Don’t let logging print handler tracebacks on emit errors
@@ -148,7 +150,7 @@ def run(cmd, check=True, capture_output=False, logger=None):
         if logger:
             logger.debug(f"run_cmd() failed, falling back to subprocess.run: {e}")
 
-    # Logging
+    # Logsource ging
     if logger:
         # Use DEBUG if we're capturing; INFO otherwise
         (logger.debug if capture_output else logger.info)(f"RUN: {cmd}")
@@ -218,6 +220,105 @@ def run(cmd, check=True, capture_output=False, logger=None):
 #        capture_output=capture_output,
 #        text=True,
 #    )
+
+
+def ensure_ipv4_forwarding_enabled(logger):
+    """
+    On Ubuntu, ensure kernel IPv4 forwarding is enabled.
+    - Verifies runtime value via `sysctl -n net.ipv4.ip_forward`
+    - Ensures /etc/sysctl.conf contains: net.ipv4.ip_forward = 1
+    - Applies the change immediately and verifies again
+    Returns True if forwarding is enabled at the end, else False.
+    """
+    sysctl_key = "net.ipv4.ip_forward"
+    conf_path = Path("/etc/sysctl.conf")
+
+    # Read current runtime value
+    try:
+        r = run(f"sysctl -n {sysctl_key}", check=False, capture_output=True, logger=logger)
+        current = (r.stdout or "").strip()
+    except Exception as e:
+        logger.warning(f"Could not read current {sysctl_key} via sysctl: {e}")
+        current = None
+
+    if current == "1":
+        logger.info(f"{sysctl_key} is already enabled at runtime (1). Ensuring persistence in {conf_path}…")
+    else:
+        logger.info(f"{sysctl_key} is currently {current!r}. Enabling in {conf_path} and applying…")
+
+    # Require root to edit /etc/sysctl.conf
+    if os.geteuid() != 0:
+        logger.error("Root privileges required to edit /etc/sysctl.conf. Re-run with sudo.")
+        raise PermissionError("Root privileges required")
+
+    # Read existing config (ignore errors -> treat as empty)
+    try:
+        text = conf_path.read_text(encoding="utf-8")
+    except Exception:
+        text = ""
+
+    # Replace existing definitions (commented or not) and remove duplicates
+    key_re = re.compile(r"^\s*#?\s*net\.ipv4\.ip_forward\s*=\s*.*$", re.IGNORECASE)
+    lines = text.splitlines()
+    new_lines = []
+    replaced = False
+    for line in lines:
+        if key_re.match(line):
+            if not replaced:
+                new_lines.append("net.ipv4.ip_forward = 1")
+                replaced = True
+            # Skip duplicates
+        else:
+            new_lines.append(line)
+
+    if not replaced:
+        if new_lines and new_lines[-1].strip() != "":
+            new_lines.append("")
+        new_lines.append("# set by remote-management-tsa")
+        new_lines.append("net.ipv4.ip_forward = 1")
+
+    new_text = "\n".join(new_lines) + "\n"
+
+    # Backup then atomic write
+    try:
+        if conf_path.exists():
+            ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup = conf_path.with_name(conf_path.name + f".bak.{ts}")
+            shutil.copy2(conf_path, backup)
+            logger.info(f"Backed up {conf_path} -> {backup}")
+    except Exception as e:
+        logger.warning(f"Could not backup {conf_path}: {e}")
+
+    fd, tmp = tempfile.mkstemp(dir=str(conf_path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(new_text)
+        os.replace(tmp, conf_path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+    # Apply immediately and reload from the file
+    try:
+        run(f"sysctl -w {sysctl_key}=1", check=True, capture_output=True, logger=logger)
+        run("sysctl -p /etc/sysctl.conf", check=False, capture_output=True, logger=logger)
+    except Exception as e:
+        logger.error(f"Failed to apply sysctl change: {e}")
+
+    # Verify final state
+    verify = run(f"sysctl -n {sysctl_key}", check=False, capture_output=True, logger=logger)
+    final = (verify.stdout or "").strip()
+    if final == "1":
+        logger.info(f"{sysctl_key} is enabled and persisted in {conf_path}. ✅")
+        return True
+    else:
+        logger.warning(f"{sysctl_key} appears to be {final!r}. Check for overrides in /etc/sysctl.d/*.conf.")
+        return False
+
+
+
 
 
 def add_locked_down_sshd(logger, CLIENT_SSH_TUNNEL_PORT, ssh_user="ops"):
@@ -618,52 +719,159 @@ def _import_keys_from_file(auth_keys: Path, file_path: str, logger):
 
     logger.info(f"Imported from {p}: added={added}, skipped-duplicates={skipped}, invalid-format={invalid}")
 
-
-
 def configure_ufw_ssh_from_private(logger):
     """
-    Prompt for each RFC1918 subnet and, if confirmed, allow SSH (22/tcp) from it via UFW.
-    Uses existing run() helper.
+    Interactively collect IPv4 source ranges for SSH allow rules.
+    - Prompts for RFC1918 ranges (10/8, 172.16/12, 192.168/16)
+    - Then lets the user add any additional IPv4 subnets or single IPv4 addresses
+    - Returns a de-duplicated, order-preserving list of normalized strings
+      (e.g., '10.0.0.0/8', '172.16.0.0/12', '203.0.113.5')
+
+    NOTE: This function does NOT modify UFW. It only gathers inputs.
     """
-    private_subnets = [
-        "10.0.0.0/8",
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-    ]
+    private_subnets = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+    selected = []
 
-    # Check if ufw exists
-    try:
-        result = run("ufw --version", check=False)
-        if result.returncode != 0:
-            logger.error("UFW does not appear to be installed. Install it with: sudo apt-get install ufw")
-            return
-    except Exception as e:
-        logger.error(f"Failed to check UFW availability: {e}")
-        return
-
-    logger.info("Configuring UFW to allow SSH (tcp/22) from selected private IPv4 ranges.")
-
+    logger.info("Select private IPv4 ranges to include (for SSH allow rules).")
     for cidr in private_subnets:
-        ans = input(f"Allow SSH (tcp/22) from {cidr}? [y/N]: ").strip().lower()
+        ans = input(f"Include {cidr}? [y/N]: ").strip().lower()
         if ans == "y":
-            cmd = f"sudo ufw allow from {cidr} to any port 22 proto tcp"
-            logger.info(f"Adding rule: {cmd}")
-            run(cmd, check=True)
+            selected.append(cidr)
         else:
-            logger.info(f"Skipped {cidr}")
+            logger.debug(f"Skipped {cidr}")
 
-    # Show current rules
-    run("sudo ufw status numbered", check=False)
+    logger.info("You can add additional IPv4 subnets or single IPv4 addresses.")
+    while True:
+        more = input("Add another (e.g., 203.0.113.0/24 or 203.0.113.5)? [y/N]: ").strip().lower()
+        if more != "y":
+            break
 
-    # Check if ufw is active
-    result = run("sudo ufw status", check=False)
-    if "inactive" in result.stdout.lower():
-        ans = input("UFW is inactive. Enable it now? [y/N]: ").strip().lower()
-        if ans == "y":
-            logger.info("Enabling UFW…")
-            run("sudo ufw enable", check=True)
-        else:
-            logger.warning("UFW remains inactive. Rules will not take effect until UFW is enabled.")
+        entry = input("Enter IPv4 subnet or single IPv4 address: ").strip()
+        if not entry:
+            logger.warning("Empty input; not adding.")
+            continue
+
+        try:
+            if "/" in entry:
+                net = ipaddress.IPv4Network(entry, strict=False)
+                norm = str(net)
+            else:
+                ip = ipaddress.IPv4Address(entry)
+                norm = str(ip)  # keep as bare IP (UFW accepts this)
+        except ValueError:
+            logger.error(f"Invalid IPv4 subnet/IP: {entry!r}. Please try again.")
+            continue
+
+        if norm == "0.0.0.0/0":
+            confirm = input("WARNING: This opens SSH to the entire Internet (0.0.0.0/0). "
+                            "Type YES to include it: ").strip()
+            if confirm != "YES":
+                logger.info("Skipped 0.0.0.0/0.")
+                continue
+
+        selected.append(norm)
+        logger.info(f"Queued: {norm}")
+
+    # De-duplicate while preserving order
+    seen, unique = set(), []
+    for s in selected:
+        if s not in seen:
+            unique.append(s)
+            seen.add(s)
+
+    if unique:
+        logger.info(f"Collected {len(unique)} source range(s).")
+    else:
+        logger.warning("No source ranges selected.")
+
+    return unique
+
+
+
+#def configure_ufw_ssh_from_private(logger):
+#    """
+#    Prompt for each RFC1918 subnet and, if confirmed, allow SSH (22/tcp) from it via UFW.
+#    Then interactively prompt for any additional IPv4 subnets/IPs to allow.
+#    """
+#    private_subnets = [
+#        "10.0.0.0/8",
+#        "172.16.0.0/12",
+#        "192.168.0.0/16",
+#    ]
+#
+#    # Check if ufw exists
+#    try:
+#        result = run("ufw --version", check=False, capture_output=True, logger=logger)
+#        if result.returncode != 0:
+#            logger.error("UFW does not appear to be installed. Install it with: sudo apt-get install ufw")
+#            return
+#    except Exception as e:
+#        logger.error(f"Failed to check UFW availability: {e}")
+#        return
+#
+#    logger.info("Configuring UFW to allow SSH (tcp/22) from selected private source IPv4 ranges.")
+#
+#    # RFC1918 prompts
+#    for cidr in private_subnets:
+#        ans = input(f"Allow SSH (tcp/22) from {cidr}? [y/N]: ").strip().lower()
+#        if ans == "y":
+#            cmd = f"sudo ufw allow from {cidr} to any port 22 proto tcp"
+#            logger.info(f"Adding rule: {cmd}")
+#            run(cmd, check=True, logger=logger)
+#        else:
+#            logger.info(f"Skipped {cidr}")
+#
+#    # Additional manual subnets/IPs
+#    logger.info("You can add additional IPv4 subnets or single IPs to allow SSH from.")
+#    while True:
+#        more = input("Add another IPv4 subnet or IP (e.g., 203.0.113.0/24 or 203.0.113.5)? [y/N]: ").strip().lower()
+#        if more != "y":
+#            break
+#
+#        entry = input("Enter IPv4 subnet or single IPv4 address: ").strip()
+#        if not entry:
+#            logger.warning("Empty input; not adding a rule.")
+#            continue
+#
+#        # Validate input as IPv4 network or IPv4 address
+#        norm = None
+#        try:
+#            if "/" in entry:
+#                net = ipaddress.IPv4Network(entry, strict=False)
+#                norm = str(net)
+#            else:
+#                ip = ipaddress.IPv4Address(entry)
+#                norm = str(ip)  # UFW accepts bare IPs; no /32 needed
+#        except ValueError:
+#            logger.error(f"Invalid IPv4 subnet/IP: {entry!r}. Please try again.")
+#            continue
+#
+#        # Extra caution for open-to-world
+#        if norm == "0.0.0.0/0":
+#            confirm = input("WARNING: This opens SSH to the entire Internet (0.0.0.0/0). Type YES to proceed: ").strip()
+#            if confirm != "YES":
+#                logger.info("Skipped 0.0.0.0/0.")
+#                continue
+#
+#        cmd = f"sudo ufw allow from {norm} to any port 22 proto tcp"
+#        logger.info(f"Adding rule: {cmd}")
+#        try:
+#            run(cmd, check=True, logger=logger)
+#        except Exception as e:
+#            logger.error(f"Failed to add rule for {norm}: {e}")
+#
+#    # Show current rules
+#    run("sudo ufw status numbered", check=False, logger=logger)
+#
+#    # Check if ufw is active
+#    result = run("sudo ufw status", check=False, capture_output=True, logger=logger)
+#    if "inactive" in (result.stdout or "").lower():
+#        ans = input("UFW is inactive. Enable it now? [y/N]: ").strip().lower()
+#        if ans == "y":
+#            logger.info("Enabling UFW…")
+#            run("sudo ufw enable", check=True, logger=logger)
+#        else:
+#            logger.warning("UFW remains inactive. Rules will not take effect until UFW is enabled.")
 
 
 def get_persistent_config(logger, varname, default, prompt=True, cast=None):
@@ -1215,6 +1423,139 @@ def check_supported_ubuntu(logger):
     logger.info(f"Confirmed supported OS: {name} {ver}")
 
 
+def select_nat_interface(logger):
+    """
+    On Linux, pick the interface to use for NAT/Masquerading of SSH/UI traffic.
+    - Verifies 'lo' exists.
+    - If only one other interface exists, returns it.
+    - If multiple, prompts the user to choose from a list.
+    Returns: interface name (str)
+    Raises: RuntimeError if no non-loopback interfaces are found.
+    """
+    sysnet = Path("/sys/class/net")
+    if not sysnet.exists():
+        raise RuntimeError("/sys/class/net not found; cannot enumerate interfaces")
+
+    if "lo" not in os.listdir(sysnet):
+        logger.error("Loopback interface 'lo' is missing — system appears misconfigured.")
+        raise RuntimeError("Missing loopback interface 'lo'")
+
+    # Gather non-loopback interfaces
+    candidates = sorted([i for i in os.listdir(sysnet) if i != "lo"])
+
+    if not candidates:
+        logger.error("No non-loopback network interfaces found.")
+        raise RuntimeError("No NAT-capable interface present")
+
+    def _state(iface: str) -> str:
+        try:
+            return (sysnet / iface / "operstate").read_text().strip()
+        except Exception:
+            return "unknown"
+
+    if len(candidates) == 1:
+        chosen = candidates[0]
+        logger.info(f"Using interface '{chosen}' for NAT/masquerading (only non-loopback interface).")
+        return chosen
+
+    # Multiple interfaces: prompt user
+    # Default to the first interface that is 'up', otherwise the first in the list
+    default_idx = 0
+    for idx, name in enumerate(candidates):
+        if _state(name).lower() == "up":
+            default_idx = idx
+            break
+
+    logger.info("Multiple interfaces detected. Select one to use for NAT/Masquerading of SSH and UI traffic:")
+    for idx, name in enumerate(candidates, start=1):
+        logger.info(f"  [{idx}] {name} (state={_state(name)})")
+
+    while True:
+        choice = input(f"Enter number or name [{candidates[default_idx]}]: ").strip()
+        if not choice:
+            chosen = candidates[default_idx]
+            break
+        if choice.isdigit():
+            n = int(choice)
+            if 1 <= n <= len(candidates):
+                chosen = candidates[n - 1]
+                break
+        if choice in candidates:
+            chosen = choice
+            break
+        print("Invalid selection. Please enter a listed number or interface name.")
+
+    logger.info(f"Selected interface '{chosen}' for NAT/masquerading.")
+    return chosen
+
+def get_ipv4_addr(logger, iface: str):
+    """
+    Return the IPv4 address (no CIDR) for the given Linux interface name.
+    Prefers a 'scope global' non-secondary address when multiple exist.
+    Returns: str (e.g., '192.0.2.10') or None if not found.
+    """
+    iface = (iface or "").strip()
+    if not iface:
+        logger.error("No interface name provided.")
+        return None
+
+    sysnet = Path("/sys/class/net")
+    if not (sysnet / iface).exists():
+        logger.error(f"Interface '{iface}' not found under {sysnet}.")
+        return None
+
+    # Query IPv4 addresses on the interface
+    try:
+        # ip -4 -o produces one-line-per-address, easier to parse
+        res = run(f"ip -4 -o addr show dev {shlex.quote(iface)}",
+                  check=False, capture_output=True, logger=logger)
+        out = (res.stdout or "").strip()
+        if not out:
+            logger.warning(f"No IPv4 address configured on interface '{iface}'.")
+            return None
+    except Exception as e:
+        logger.error(f"Failed to query IP for '{iface}': {e}")
+        return None
+
+    best = None
+    for line in out.splitlines():
+        # Example: "2: eth0    inet 192.168.1.5/24 brd 192.168.1.255 scope global dynamic eth0"
+        parts = line.split()
+        try:
+            i = parts.index("inet")
+            cidr = parts[i + 1]
+        except (ValueError, IndexError):
+            continue
+
+        ip_only = cidr.split("/", 1)[0]
+        # Validate IPv4
+        try:
+            ipaddress.IPv4Address(ip_only)
+        except ValueError:
+            continue
+
+        # Prefer scope global and not marked secondary/deprecated
+        scope = None
+        if "scope" in parts:
+            try:
+                scope = parts[parts.index("scope") + 1]
+            except Exception:
+                scope = None
+
+        flags = set(parts)
+        if scope == "global" and "secondary" not in flags and "deprecated" not in flags:
+            return ip_only
+
+        # Keep first seen as fallback
+        if best is None:
+            best = ip_only
+
+    if best:
+        return best
+
+    logger.warning(f"No usable IPv4 found on '{iface}'.")
+    return None
+
 def install_server(logger):
     """
     Install and configure a reverse-SSH service using autossh.
@@ -1351,7 +1692,7 @@ def install_client(logger):
       - Appends server's SSH public key to /home/support/.ssh/authorized_keys
       - Hardens sshd: disable password/PAM, disable challenge-response, enable GatewayPorts, set Port=<CLIENT_SSH_TUNNEL_PORT>
       - Restarts ssh service
-      - Installs & configures UFW rules (22 from SSH_ALLOWED_IP; and 3 ports for access and forwarding)
+      - Installs & configures UFW rules (22 from SSH_ALLOWED_IP; and 3 ports for ops user access and forwarding)
       - Installs & configures fail2ban using jail.local (banaction=ufw, port=<CLIENT_SSH_TUNNEL_PORT>)
     """
 
@@ -1373,14 +1714,6 @@ def install_client(logger):
 
     logger.info(f"SERVER_IP={SERVER_IP}, CLIENT_SSH_TUNNEL_PORT={CLIENT_SSH_TUNNEL_PORT}, SSH_ALLOWED_IP={SSH_ALLOWED_IP}")
 
-    # -- Ask the user if they would like private address space added to ufw ----
-    # -- If not we will lock it down so only the server and SSH_ALLOWED_IP can access it ----
-
-    logger.info(f"By default, ssh will be locked down to only allow  ssh port 22 access from the following source addresses")
-    logger.info(f"from the CLIENT_SSH_TUNNEL_PORT {CLIENT_SSH_TUNNEL_PORT} on port 22")
-    logger.info(f"from the SERVER_IP {SERVER_IP} on port {CLIENT_SSH_TUNNEL_PORT}")
-    logger.info(f"Would you like me to enable ssh from other private ipv4 subnets to help with your testing (these ufw rules should be removed once finished)")
-    configure_ufw_ssh_from_private(logger)
 
     # --- 1) authorized_keys for ops user --------------------------------
     logger.info("adding ssh authorized_keys for the ops user.")
@@ -1447,20 +1780,91 @@ def install_client(logger):
     except Exception as e:
         logger.warning(f"Could not chown ~/.ssh to ops:ops (non-fatal): {e}")
 
-#    # --- 2) sshd hardening/config -------------------------------------------
-#    harden_sshd(logger, CLIENT_SSH_TUNNEL_PORT, ssh_login_user="ops")
-
-    # --- 2) create a second locked down sshd for use for remote-management---
+    # --- 2) create a second hardened sshd for use for ops user, only allowed to execute remote-access.py ---
     add_locked_down_sshd(logger, CLIENT_SSH_TUNNEL_PORT, ssh_user="ops") 
 
-    # --- 3) UFW --------------------------------------------------------------
+    # --- 3) UFW ------------------------------------------------------------
+
+    #Backup and UFW Installation:
+    #
+    logger.debug(f"UFW Backup and UFW Installation")
     #backup the existing iptables rules to /var/backups/iptables 
     backup_iptables(logger)
+    #check ufw is installed, if not ask and install it
     ensure_pkg("ufw", logger)
+
+    #Client Access UFW Rules:
+    #
+    logger.debug(f"UFW Adding Client Access UFW Rules")
+    #add ufw rule to allow the server to ssh using CLIENT_SSH_TUNNEL_PORT  
+    #note: the server only needs access to one port CLIENT_SSH_TUNNEL_PORT (Default 9000)
+    run(f"sudo ufw allow from {SERVER_IP} to any port {CLIENT_SSH_TUNNEL_PORT} proto tcp")
+
+    #add ufw rules to allow port 22 access from the VPN
     run(f"sudo ufw allow from {SSH_ALLOWED_IP} to any port 22 proto tcp")
-    for p in (CLIENT_SSH_TUNNEL_PORT, CLIENT_SSH_PORT_FORWARD, CLIENT_UI_PORT_FORWARD):
-        run(f"sudo ufw allow from {SERVER_IP} to any port {p} proto tcp")
+    #add ufw rules to allow port CLIENT_SSH_TUNNEL_PORT access from the VPN
+    run(f"sudo ufw allow from {SSH_ALLOWED_IP} to any port {CLIENT_SSH_TUNNEL_PORT} proto tcp")
+    #add ufw rules to allow port CLIENT_SSH_PORT_FORWARD access from the VPN
+    run(f"sudo ufw allow from {SSH_ALLOWED_IP} to any port {CLIENT_SSH_PORT_FORWARD} proto tcp")
+    #add ufw rules to allow port CLIENT_UI_PORT_FORWARD access from the VPN
+    run(f"sudo ufw allow from {SSH_ALLOWED_IP} to any port {CLIENT_UI_PORT_FORWARD} proto tcp")
+
+    #Ask if the user wants to add any other ufw rules to allow private src addresses to access before we lock down traffic
+    logger.info(f"By default, ssh will be locked down to only allow ssh port 22 access from the following source addresses")
+    logger.info(f"from the SSH_ALLOWED_IP {SSH_ALLOWED_IP}")
+    logger.info(f"from the SERVER_IP {SERVER_IP}")
+    logger.info(f"Would you like me to enable ssh from other private ipv4 subnets to help with your testing (these ufw rules should be removed once finished)")
+    subnets = configure_ufw_ssh_from_private(logger)
+    logger.debug(f"UFW user selected subnets = {subnets}")
+    #open up those subnets for port 22
+    logger.debug(f"UFW adding rules to open up ports 22 {CLIENT_SSH_TUNNEL_PORT} {CLIENT_SSH_PORT_FORWARD} {CLIENT_UI_PORT_FORWARD} for user selected subnets")
+    for cidr in subnets:
+        run(f"sudo ufw allow from {cidr} to any port 22 proto tcp", check=True, logger=logger)
+    #open up those subnets for port CLIENT_SSH_TUNNEL_PORT 
+    for cidr in subnets:
+        run(f"sudo ufw allow from {cidr} to any port {CLIENT_SSH_TUNNEL_PORT} proto tcp", check=True, logger=logger)
+    #open up those subnets for port CLIENT_SSH_PORT_FORWARD 
+    for cidr in subnets:
+        run(f"sudo ufw allow from {cidr} to any port {CLIENT_SSH_PORT_FORWARD} proto tcp", check=True, logger=logger)
+    #open up those subnets for port CLIENT_UI_PORT_FORWARD 
+    for cidr in subnets:
+        run(f"sudo ufw allow from {cidr} to any port {CLIENT_UI_PORT_FORWARD} proto tcp", check=True, logger=logger)
+
+    #Client NAT Masquerading UFW Rules for ssh and UI (22 and 443) plus kernel configuration:
+    #
+    logger.debug(f"UFW adding NAT Masquerading rules")
+    #check kernel forwarding is enabled, if not enable it 
+    logger.debug(f"Checking kernel ipv4 forwarding is enabled")
+    ensure_ipv4_forwarding_enabled(logger)
+    #get the interface name touse for NAT/Masquerading (note: one interface for everything is enough) 
+    interface_name = select_nat_interface(logger)
+    if interface_name:
+        logger.debug(f"NAT interface_name is {interface_name}")
+    else:
+        logger.error(f"interface_name was not set correctly")
+    #get the selected interface ip address
+    ip_address = get_ipv4_addr(logger, interface_name)
+    if ip_address:
+        logger.debug(f"NAT interface {interface_name} has IPv4 {ip_address}")
+    else:
+        logger.error(f"{interface_name} has no IPv4 address configured.")
+    logger.debug(f"Adding NAT Masquerading rules")
+    run(f"sudo ufw default deny forward")
+    #sudo ufw allow from 107.21.96.169 to any port 9001 proto tcp
+    run(f"sudo ufw allow from {SSH_ALLOWED_IP} to any port {CLIENT_SSH_PORT_FORWARD} proto tcp")
+    run(f"sudo ufw allow from {SSH_ALLOWED_IP} to any port {CLIENT_UI_PORT_FORWARD} proto tcp")
+    run(f"sudo ufw route allow in on lo out on {interface_name}")
+    run(f"sudo ufw route allow in on {interface_name} out on lo")
+    run(f"sudo ufw allow in on lo from {SSH_ALLOWED_IP} to {ip_address} port {CLIENT_SSH_PORT_FORWARD} proto tcp")
+    run(f"sudo ufw allow in on {interface_name} from {SERVER_IP} to {ip_address} port {CLIENT_SSH_PORT_FORWARD} proto tcp")
+    run(f"sudo ufw allow in on lo from {SSH_ALLOWED_IP} to {ip_address} port {CLIENT_UI_PORT_FORWARD} proto tcp")
+    run(f"sudo ufw allow in on {interface_name} from {SERVER_IP} to {ip_address} port {CLIENT_UI_PORT_FORWARD} proto tcp")
+
+    #Starting up ufw:
+    #
+    #enable ufw
     run("echo 'y' | sudo ufw enable", check=False)
+    #check ufw status
     run("sudo ufw status", check=False)
 
     # --- 4) fail2ban via jail.local (safer than editing jail.conf) ----------
