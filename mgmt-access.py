@@ -1684,6 +1684,73 @@ def install_server(logger):
     return True
 
 
+def uninstall_server(logger):
+    """
+    Uninstall the reverse-SSH *server* components.
+    Steps:
+      1) remove ops user via remove_ops_user(logger)
+      2) stop & disable reverse-ssh.service; remove its files
+      3) remove /usr/local/sbin/mgmt-access.py
+      7) systemctl daemon-reload
+      8) prompt to delete /home/support/remote-management-tsa
+      9) log note about pip-installed argparse
+    """
+    logger.info("Starting server uninstallation…")
+
+    # 1) Remove 'ops' user
+    try:
+        remove_ops_user(logger)  # provided elsewhere
+        logger.info("Requested removal of user 'ops'.")
+    except NameError:
+        logger.warning("remove_ops_user(logger) is not defined. Skipping user removal.")
+    except Exception as e:
+        logger.error(f"remove_ops_user(logger) failed: {e}")
+
+    # 2) Stop & disable the service; remove unit and config files
+    logger.info("Stopping and disabling reverse-ssh.service (best-effort)…")
+    run("sudo systemctl stop reverse-ssh.service", check=False, logger=logger)
+    run("sudo systemctl disable reverse-ssh.service", check=False, logger=logger)
+
+    logger.info("Removing reverse-ssh service files (best-effort)…")
+    run("sudo rm -f /etc/ssh/ssh_config.d/auto-ssh-systemd-hosts.conf", check=False, logger=logger)
+    run("sudo rm -f /etc/systemd/system/reverse-ssh.service", check=False, logger=logger)
+
+    # 3) Remove mgmt-access.py (server-side helper)
+    logger.info("Removing /usr/local/sbin/mgmt-access.py (best-effort)…")
+    run("sudo rm -f /usr/local/sbin/mgmt-access.py", check=False, logger=logger)
+
+    # 7) Reload systemd daemon to pick up unit removals
+    logger.info("Reloading systemd daemon…")
+    run("sudo systemctl daemon-reload", check=False, logger=logger)
+
+    # 8) Optionally delete the Git working directory
+    repo_dir = Path("/home/support/remote-management-tsa")
+    try:
+        if repo_dir.exists() and repo_dir.is_dir():
+            ans = input(
+                f"Do you want to delete the Git directory {repo_dir}? Type YES to confirm, anything else to skip: "
+            ).strip()
+            if ans == "YES":
+                logger.info(f"Deleting {repo_dir} …")
+                # Use sudo to avoid permission issues; -r to remove recursively, -f to ignore missing files
+                run(f"sudo rm -rf {repo_dir}", check=False, logger=logger)
+            else:
+                logger.info(f"Left {repo_dir} intact.")
+        else:
+            logger.debug(f"{repo_dir} not present; nothing to delete.")
+    except Exception as e:
+        logger.warning(f"Could not delete {repo_dir}: {e}")
+
+    # 9) Argparse note
+    logger.info(
+        "Note: argparse was installed via pip on this host, we are leaving it in place; "
+        "it should not cause any issues."
+    )
+
+    logger.info("Server uninstallation steps completed.")
+    return True
+
+
 def install_client(logger):
     """
     Prepare a client host for secure reverse-SSH access.
@@ -1959,6 +2026,7 @@ def main():
     parser.add_argument("--install-client", action="store_true", help="Install client components")
     parser.add_argument("--add-ops-user", action="store_true", help="create an ops user")
     parser.add_argument("--remove-ops-user", action="store_true", help="remove the ops user")
+    parser.add_argument("--uninstall-server", action="store_true", help="Uninstall server components")
     # Parse arguments
     args = parser.parse_args()
     # If no arguments besides --log-level, show help and exit
@@ -1995,6 +2063,8 @@ def main():
         add_ops_user(logger)
     elif args.remove_ops_user:
         remove_ops_user(logger)
+    elif args.uninstall_server:
+        uninstall_server(logger)
     else:
         parser.print_help()
         sys.exit(1)
