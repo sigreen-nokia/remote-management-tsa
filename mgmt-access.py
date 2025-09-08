@@ -438,42 +438,6 @@ def _as_port(logger, name, value, default_for_msg=None):
 
 
 
-#def configure_ops_login_banner(logger):
-#    server_marker = Path("/etc/systemd/system/reverse-ssh.service")
-#    if not server_marker.exists():
-#        logger.info("reverse-ssh.service not present; skipping ops bash_profile modification (not a server).")
-#        return
-#
-#    bash_profile = Path("/home/ops/.bash_profile")
-#    login_cmd = "sudo /usr/local/sbin/mgmt-access.py --status"
-#    header = "# Auto-run mgmt-access status on login"
-#
-#    # Ensure file exists
-#    bash_profile.parent.mkdir(parents=True, exist_ok=True)
-#    if not bash_profile.exists():
-#        bash_profile.touch(mode=0o644, exist_ok=True)
-#
-#    # Append only if not already present
-#    try:
-#        existing = bash_profile.read_text(encoding="utf-8")
-#    except Exception:
-#        existing = ""
-#
-#    if login_cmd in existing:
-#        logger.debug(f"'{login_cmd}' already present in {bash_profile}; no change.")
-#    else:
-#        with open(bash_profile, "a", encoding="utf-8") as f:
-#            if not existing.endswith("\n"):
-#                f.write("\n")
-#            f.write(f"\n{header}\n{login_cmd}\n")
-#        logger.info(f"Configured {bash_profile} to run '{login_cmd}' on login.")
-#
-#    # Best-effort ownership
-#    try:
-#        run(f"sudo chown ops:ops {bash_profile}", check=False, logger=logger) 
-#    except subprocess.CalledProcessError as e:
-#        logger.warning(f"Could not chown {bash_profile} to ops:ops (non-fatal): {e}")
-
 def configure_ops_login_banner(logger):
     """
     Server-only: append an auto-status line to ~ops/.bash_profile.
@@ -1272,22 +1236,13 @@ def install_server(logger):
     CLIENT_FQDN_OR_IP             = get_persistent_config(logger, "CLIENT_FQDN_OR_IP", "10.20.30.40")
 
     # The host alias used by autossh (matches the Host entry we write below).
-    AUTOSSH_HOST_ALIAS = CLIENT_FQDN_OR_IP  # in your bash you used "vm-in-deepfield-gcp"; align as needed
+    AUTOSSH_HOST_ALIAS = CLIENT_FQDN_OR_IP  
 
     # Paths we write:
     ssh_cfg_path = "/etc/ssh/ssh_config.d/auto-ssh-systemd-hosts.conf"
     unit_path    = "/etc/systemd/system/reverse-ssh.service"
 
     # --- Helpers ---
-# moved out 
-#    def run(cmd, check=True, capture_output=False):
-#        logger.debug(f"Running: {cmd}")
-#        return subprocess.run(
-#            cmd if isinstance(cmd, list) else shlex.split(cmd),
-#            check=check,
-#            capture_output=capture_output,
-#            text=True,
-#        )
 
     def write_file_with_sudo(dest_path, content):
         # Use a here-doc via tee to avoid worrying about root file perms.
@@ -1404,89 +1359,6 @@ def install_client(logger):
     check_supported_ubuntu(logger)
     check_not_dcu(logger)
     check_ops_user(logger)
-
-#    # --- Helpers--------------------------------
-#    def run(cmd, check=True):
-#        """Prefer your run_cmd() if present; else subprocess."""
-#        try:
-#            # If your module defines run_cmd(logger, cmd, check=True), use it
-#            return run_cmd(logger, cmd, check=check)  # type: ignore[name-defined]
-#        except Exception:
-#            logger.info(f"RUN: {cmd}")
-#            return subprocess.run(
-#                cmd, shell=True, check=check,
-#                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-#            )
-
-#    def read_text(p):
-#        try:
-#            return Path(p).read_text(encoding="utf-8")
-#        except FileNotFoundError:
-#            return ""
-#
-#    def write_text(p, content, mode=0o644):
-#        Path(p).parent.mkdir(parents=True, exist_ok=True)
-#        Path(p).write_text(content, encoding="utf-8")
-#        os.chmod(p, mode)
-#
-#    def append_if_missing_line(p, line):
-#        current = read_text(p)
-#        needle = line.strip()
-#        if needle and needle not in current:
-#            with open(p, "a", encoding="utf-8") as fh:
-#                if current and not current.endswith("\n"):
-#                    fh.write("\n")
-#                fh.write(needle + "\n")
-#            logger.info(f"Appended to {p}")
-#        else:
-#            logger.info(f"Line already present in {p}")
-
-
-#    def backup_file(p):
-#        """Backup config file p if it exists, to <p>.bak-YYYYmmdd-HHMMSS"""
-#        src = Path(p)
-#        if src.exists():
-#            ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-#            dst = src.with_suffix(src.suffix + f".bak-{ts}")
-#            try:
-#                shutil.copy2(src, dst)
-#                logger.info(f"Note: I have Backed up file {src} before modifying to file {dst}")
-#            except Exception as e:
-#                logger.warning(f"Could not backup {src}: {e}")
-
-#    def replace_or_add_line(p, key_regex, replacement, extra_lines=None):
-#        """
-#        Replace first line matching key_regex with replacement; if none matched, append replacement.
-#        Optionally also ensure extra_lines (list of lines) appear *after* replacement.
-#        """
-#        backup_file(p)  # backup before modifying
-#        content = read_text(p)
-#        lines = content.splitlines()
-#        pat = re.compile(key_regex)
-#        replaced = False
-#        for i, line in enumerate(lines):
-#            if pat.search(line):
-#                if lines[i].strip() != replacement.strip():
-#                    lines[i] = replacement
-#                replaced = True
-#                # insert extra lines right after
-#                if extra_lines:
-#                    for extra in extra_lines:
-#                        if extra not in lines[i+1:i+2+len(extra_lines)]:  # avoid duplicates
-#                            lines.insert(i + 1, extra)
-#                break
-#        if not replaced:
-#            lines.append(replacement)
-#            if extra_lines:
-#                for extra in extra_lines:
-#                    if extra not in lines:
-#                        lines.append(extra)
-#        new = "\n".join(lines) + "\n"
-#        if new != content:
-#            write_text(p, new)
-#            logger.info(f"Updated {p}: set `{replacement}` (+ extras)")
-#        else:
-#            logger.info(f"No change needed in {p} for `{replacement}`")
 
 
     #prompt for each of the variables, and store localy as .file so th enext run has good default
