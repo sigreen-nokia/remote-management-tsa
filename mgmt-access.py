@@ -1346,33 +1346,106 @@ def remove_ops_user(logger):
         logger.error(f"Unexpected error: {e}")
 
 
+#def ensure_ssh_key(logger, ssh_dir, user_name, key_name="id_rsa"):
+#    """
+#    Ensure SSH key pair exists for our user.
+#    If missing, prompt to generate one.
+#    Then display public key so user can copy it to client.
+#    """
+#    private_key = os.path.join(ssh_dir, key_name)
+#    logger.info(f"private_key {private_key}")
+#    public_key = private_key + ".pub"
+#    logger.info(f"public_key {public_key}")
+#
+#    if not os.path.exists(public_key):
+#        logger.info(f"No SSH key found at {public_key}")
+#        response = input("No SSH key exists. Do you want to generate a new SSH key pair? [y/N]: ").strip().lower()
+#        if response == "y":
+#            #we need to run this as the user not root, to avid permission problems with the tunnel
+#            try:
+#                os.makedirs(ssh_dir, exist_ok=True)
+#                subprocess.run(
+#                    ["sudo", "-u", user_name,
+#                     "ssh-keygen", "-t", "rsa", "-b", "4096",
+#                     "-f", private_key, "-N", ""],
+#                    check=True
+#                )
+#                logger.info(f"SSH key pair generated at {private_key} and {public_key}")
+#            except subprocess.CalledProcessError as e:
+#                logger.error(f"Failed to generate SSH key pair: {e}")
+#                return False
+#        else:
+#            logger.warning("User declined to generate SSH key. Skipping.")
+#            return False
+#
+#    # Show the public key
+#    if os.path.exists(public_key):
+#        with open(public_key, "r") as f:
+#            pubkey = f.read().strip()
+#        print("\n=== This is your public key ===")
+#        print(pubkey)
+#        print("\n==========================-=====")
+#        print("Note it down as you will need this when configuring the client-instance.\n")
+#        logger.info("Displayed public key to user.")
+#    else:
+#        logger.error("Public key still missing after attempted generation.")
+#        return False
+#
+#    return True
+
 def ensure_ssh_key(logger, ssh_dir, user_name, key_name="id_rsa"):
     """
-    Ensure SSH key pair exists for our user.
-    If missing, prompt to generate one.
-    Then display public key so user can copy it to client.
+    Ensure SSH key pair exists for user_name at ssh_dir.
+    If missing, prompt to generate it as that user, then display the public key.
     """
+    user_name = (user_name or "").strip()
+    if not user_name:
+        logger.error("ensure_ssh_key: user_name is required")
+        return False
+
+    # Validate user exists and resolve home (not strictly needed if ssh_dir is absolute)
+    try:
+        pw = pwd.getpwnam(user_name)
+    except KeyError:
+        logger.error(f"User '{user_name}' does not exist.")
+        return False
+
     private_key = os.path.join(ssh_dir, key_name)
-    logger.info(f"private_key {private_key}")
-    public_key = private_key + ".pub"
-    logger.info(f"public_key {public_key}")
+    public_key  = private_key + ".pub"
+
+    logger.debug(f"ensure_ssh_key for {user_name}: private={private_key}, public={public_key}")
+
+    # Ensure the .ssh directory exists and is owned by the user (NOT root)
+    try:
+        subprocess.run(
+            ["sudo", "install", "-d", "-m", "700", "-o", user_name, "-g", user_name, ssh_dir],
+            check=True
+        )
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to create/fix {ssh_dir} for {user_name}: {e}")
+        return False
 
     if not os.path.exists(public_key):
         logger.info(f"No SSH key found at {public_key}")
-        response = input("No SSH key exists. Do you want to generate a new SSH key pair? [y/N]: ").strip().lower()
+        response = input(f"No SSH key exists for {user_name}. Generate a new SSH key pair? [y/N]: ").strip().lower()
         if response == "y":
-            #we need to run this as the user not root, to avid permission problems with the tunnel
             try:
-                os.makedirs(ssh_dir, exist_ok=True)
+                # Generate as the user; -H sets HOME to user's home
                 subprocess.run(
-                    ["sudo", "-u", user_name,
+                    ["sudo", "-H", "-u", user_name,
                      "ssh-keygen", "-t", "rsa", "-b", "4096",
-                     "-f", private_key, "-N", ""],
+                     "-f", private_key, "-N", "", "-q"],
                     check=True
                 )
-                logger.info(f"SSH key pair generated at {private_key} and {public_key}")
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to generate SSH key pair: {e}")
+
+                # Normalize ownership & permissions
+                subprocess.run(["sudo", "chown", f"{user_name}:{user_name}", private_key, public_key], check=True)
+                subprocess.run(["sudo", "chmod", "600", private_key], check=True)
+                subprocess.run(["sudo", "chmod", "644", public_key], check=True)
+
+                logger.info(f"SSH key pair generated at {private_key} and {public_key} (owner={user_name})")
+            } except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to generate SSH key pair for {user_name}: {e}")
                 return False
         else:
             logger.warning("User declined to generate SSH key. Skipping.")
@@ -1380,18 +1453,24 @@ def ensure_ssh_key(logger, ssh_dir, user_name, key_name="id_rsa"):
 
     # Show the public key
     if os.path.exists(public_key):
-        with open(public_key, "r") as f:
-            pubkey = f.read().strip()
-        print("\n=== This is your public key ===")
-        print(pubkey)
-        print("\n==========================-=====")
-        print("Note it down as you will need this when configuring the client-instance.\n")
-        logger.info("Displayed public key to user.")
+        try:
+            with open(public_key, "r", encoding="utf-8") as f:
+                pubkey = f.read().strip()
+            print("\n=== This is your public key ===")
+            print(pubkey)
+            print("\n===============================\n"
+                  "Note it down as you will need this when configuring the client-instance.\n")
+            logger.info("Displayed public key to user.")
+            return True
+        except Exception as e:
+            logger.error(f"Could not read public key {public_key}: {e}")
+            return False
     else:
         logger.error("Public key still missing after attempted generation.")
         return False
 
-    return True
+
+
 
 def check_not_dcu(logger):
     """Abort if running on a DCU (detected by /pipedream marker)."""
