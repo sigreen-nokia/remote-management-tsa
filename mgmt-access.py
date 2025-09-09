@@ -1346,7 +1346,7 @@ def remove_ops_user(logger):
         logger.error(f"Unexpected error: {e}")
 
 
-def ensure_ssh_key(logger, ssh_dir, key_name="id_rsa", user_name):
+def ensure_ssh_key(logger, ssh_dir, user_name, key_name="id_rsa"):
     """
     Ensure SSH key pair exists for our user.
     If missing, prompt to generate one.
@@ -1733,8 +1733,8 @@ def install_server(logger):
 
     ssh_dir="/home/" + user_name + "/.ssh" 
     logger.debug(f"ssh_dir = {ssh_dir}")
-    #dump the public key or if its missing offer to create an ssh key pair
-    ensure_ssh_key(logger, ssh_dir, user_name)
+    #check and print the public key or if its missing offer to create an ssh key pair
+    ensure_ssh_key(logger, user_name, ssh_dir)
 
     logger.info("installing mgmt-access.py into directory /usr/local/sbin/mgmt-access.py")
     install_sw(logger)
