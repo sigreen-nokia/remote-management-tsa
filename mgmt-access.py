@@ -359,6 +359,9 @@ def add_locked_down_sshd(logger, CLIENT_SSH_TUNNEL_PORT, ssh_user="ops"):
         "ChallengeResponseAuthentication no\n"
         "GatewayPorts yes\n"
         f"Port {CLIENT_SSH_TUNNEL_PORT}\n"
+        f"PubkeyAuthentication yes\n"
+        f"AuthorizedKeysFile .ssh/authorized_keys\n"
+        f"LogLevel VERBOSE\n"
     )
 
     unit_text = (
@@ -974,44 +977,98 @@ def turn_on(logger, timer_override=None):
     except subprocess.CalledProcessError as e:
         logger.error(f"Error managing {service}: {e.stderr.strip()}")
 
+
+import shutil
+import subprocess
+
 def turn_off(logger):
     """
-    Disable and stop reverse-ssh.service if present, then verify it's running.
+    Disable and stop reverse-ssh.service if present, remove all at jobs, then verify it's stopped.
     """
-    logger.info(f"Disabling the Remote Access Management Service...")
+    logger.info("Disabling the Remote Access Management Service...")
     service = "reverse-ssh.service"
 
     logger.debug(f"Checking for {service}...")
-
     try:
         # Check if service exists
         result = subprocess.run(
             ["systemctl", "list-unit-files", service],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
         )
-        if service not in result.stdout:
+        if service not in (result.stdout or ""):
             logger.error(f"{service} not found on this system. Aborting.")
             return
 
         logger.debug(f"{service} found. Disabling and stopping...")
-
         subprocess.run(["sudo", "systemctl", "stop", service], check=True)
         subprocess.run(["sudo", "systemctl", "disable", service], check=True)
+
+        # --- NEW: remove all pending at jobs (best-effort) ---
+        _remove_all_at_jobs(logger)
 
         # Check if it's inactive
         status_check = subprocess.run(
             ["systemctl", "is-active", service],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
         )
-        state = status_check.stdout.strip()
+        state = (status_check.stdout or "").strip()
 
         if state == "active":
-            logger.warning(f"{service} is still running ")
+            logger.warning(f"{service} is still running")
         else:
             logger.info(f"{service} has been stopped ✅")
 
     except subprocess.CalledProcessError as e:
-        logger.error(f"Error managing {service}: {e.stderr.strip()}")
+        logger.error(f"Error managing {service}: {e.stderr.strip() if e.stderr else e}")
+    except Exception as e:
+        logger.error(f"Unexpected error while turning off service: {e}")
+
+
+def _remove_all_at_jobs(logger):
+    """
+    Best-effort removal of all pending 'at' jobs visible to the current user.
+    When run as root (via sudo), this clears all users' jobs.
+    """
+    if shutil.which("atq") is None or shutil.which("atrm") is None:
+        logger.info("at/atrm not found; skipping at job cleanup.")
+        return
+
+    try:
+        q = subprocess.run(
+            ["atq"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+        )
+        if q.returncode != 0:
+            logger.warning(f"Could not list at jobs: {q.stderr.strip()}")
+            return
+
+        jobs = []
+        for line in (q.stdout or "").splitlines():
+            # Typical line: "123  Tue Sep  9 12:34:00 2025 a username"
+            parts = line.split()
+            if parts and parts[0].isdigit():
+                jobs.append(parts[0])
+
+        if not jobs:
+            logger.info("No pending at jobs found.")
+            return
+
+        logger.info(f"Removing {len(jobs)} at job(s): {', '.join(jobs)}")
+        for jid in jobs:
+            # root can remove any job id
+            subprocess.run(["sudo", "atrm", jid], check=False)
+
+        # Re-list to confirm
+        q2 = subprocess.run(["atq"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+        remaining = (q2.stdout or "").strip()
+        if remaining:
+            logger.warning("Some at jobs may remain:\n" + remaining)
+        else:
+            logger.info("All at jobs removed.")
+    except Exception as e:
+        logger.warning(f"Failed to remove at jobs (non-fatal): {e}")
+
+
 
 #def show_status(logger):
 #    """
@@ -1238,17 +1295,90 @@ def timer_override(value):
     print(f"Applying timer override: {value}")
 
 
-def add_ops_user(logger):
-    """
-    Create a restricted user 'ops' who can only run:
-        sudo /usr/local/sbin/mgmt-access.py
+#def add_ops_user(logger):
+#    """
+#    Create a restricted user 'ops' who can only run:
+#        sudo /usr/local/sbin/mgmt-access.py
+#
+#    Additions:
+#      - Prompts for and sets a password for 'ops'.
+#      - Configures login shell to run '/usr/local/sbin/mgmt-access.py --help'.
+#    """
+#    try:
+#        # 1. Check if user exists
+#        result = subprocess.run(
+#            ["id", "-u", "ops"],
+#            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+#        )
+#        if result.returncode == 0:
+#            logger.info("User 'ops' already exists.")
+#        else:
+#            # Create the user with /bin/bash shell
+#            subprocess.run(["sudo", "useradd", "-m", "-s", "/bin/bash", "ops"], check=True)
+#            logger.info("Created user 'ops'.")
+#
+#        # 2. Prompt for password and set it
+#        password = getpass.getpass("Enter password for user 'ops': ")
+#        confirm = getpass.getpass("Confirm password: ")
+#        if password != confirm:
+#            logger.error("Passwords do not match. Aborting.")
+#            return
+#
+#        # Use chpasswd to set password
+#        subprocess.run(
+#            ["sudo", "chpasswd"],
+#            input=f"ops:{password}",
+#            text=True,
+#            check=True
+#        )
+#        logger.info("Password set for user 'ops'.")
+#
+#        # 3. Prepare sudoers file
+#        sudoers_file = "/etc/sudoers.d/ops"
+#        rule = "ops ALL=(ALL) NOPASSWD: /usr/local/sbin/mgmt-access.py\n"
+#
+#        # Write rule atomically via visudo -cf check
+#        tmp_file = "/tmp/ops_sudoers"
+#        with open(tmp_file, "w", encoding="utf-8") as f:
+#            f.write(rule)
+#
+#        # Validate syntax with visudo
+#        check = subprocess.run(
+#            ["sudo", "visudo", "-cf", tmp_file],
+#            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+#        )
+#        if check.returncode != 0:
+#            logger.error(f"visudo check failed: {check.stderr}")
+#            return
+#
+#        # Install file into /etc/sudoers.d/
+#        shutil.move(tmp_file, sudoers_file)
+#        subprocess.run(["sudo", "chmod", "440", sudoers_file], check=True)
+#        logger.info(f"Sudoers restriction applied in {sudoers_file}")
+#
+#        # 4. Configure ops login banner 
+#        configure_ops_login_banner(logger)
+#
+#        # All Done, ops user has been created
+#        logger.info("User 'ops' created and configured successfully.")
+#
+#    except subprocess.CalledProcessError as e:
+#        logger.error(f"Command failed: {e}")
+#    except Exception as e:
+#        logger.error(f"Unexpected error: {e}")
 
-    Additions:
-      - Prompts for and sets a password for 'ops'.
-      - Configures login shell to run '/usr/local/sbin/mgmt-access.py --help'.
+
+def add_ops_user(logger):
+    """ 
+    Create/ensure a restricted user 'ops' and configure it to never lock.
+    - Creates 'ops' with /bin/bash if missing
+    - Prompts for and sets a password (any value; SSH remains key-only by server config)
+    - Unlocks the account and disables expiry/inactivity (so it won't auto-lock)
+    - Restricts sudo to /usr/local/sbin/mgmt-access.py via /etc/sudoers.d/ops
+    - Calls configure_ops_login_banner(logger)
     """
     try:
-        # 1. Check if user exists
+        # 1) Ensure user exists
         result = subprocess.run(
             ["id", "-u", "ops"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
@@ -1256,18 +1386,16 @@ def add_ops_user(logger):
         if result.returncode == 0:
             logger.info("User 'ops' already exists.")
         else:
-            # Create the user with /bin/bash shell
             subprocess.run(["sudo", "useradd", "-m", "-s", "/bin/bash", "ops"], check=True)
             logger.info("Created user 'ops'.")
 
-        # 2. Prompt for password and set it
+        # 2) Prompt for password and set it (needed so the account can be unlocked)
         password = getpass.getpass("Enter password for user 'ops': ")
         confirm = getpass.getpass("Confirm password: ")
         if password != confirm:
             logger.error("Passwords do not match. Aborting.")
             return
 
-        # Use chpasswd to set password
         subprocess.run(
             ["sudo", "chpasswd"],
             input=f"ops:{password}",
@@ -1276,34 +1404,49 @@ def add_ops_user(logger):
         )
         logger.info("Password set for user 'ops'.")
 
-        # 3. Prepare sudoers file
+        # 3) Ensure the account cannot auto-lock (unlock + disable expiry/inactivity)
+        #    -U unlocks; chage -E -1 (never expires), -I -1 (no inactivity lock),
+        #    -M -1 (no max age), -m 0 (no min age), -W 0 (no warn period)
+        subprocess.run(["sudo", "usermod", "-U", "ops"], check=True)
+        subprocess.run(["sudo", "chage", "-E", "-1", "-I", "-1", "-M", "-1", "-m", "0", "-W", "0", "ops"], check=True)
+
+        # Log final status for visibility
+        st = subprocess.run(["sudo", "passwd", "-S", "ops"], text=True, capture_output=True, check=False)
+        if st.stdout:
+            logger.info(f"'passwd -S ops': {st.stdout.strip()}")
+        st2 = subprocess.run(["sudo", "chage", "-l", "ops"], text=True, capture_output=True, check=False)
+        if st2.stdout:
+            logger.debug(f"'chage -l ops':\n{st2.stdout.strip()}")
+
+        # 4) Prepare sudoers restriction (only allow mgmt-access.py without password)
         sudoers_file = "/etc/sudoers.d/ops"
         rule = "ops ALL=(ALL) NOPASSWD: /usr/local/sbin/mgmt-access.py\n"
 
-        # Write rule atomically via visudo -cf check
         tmp_file = "/tmp/ops_sudoers"
         with open(tmp_file, "w", encoding="utf-8") as f:
             f.write(rule)
 
-        # Validate syntax with visudo
+        # Validate syntax with visudo; then install
         check = subprocess.run(
             ["sudo", "visudo", "-cf", tmp_file],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
         if check.returncode != 0:
-            logger.error(f"visudo check failed: {check.stderr}")
+            logger.error(f"visudo check failed: {check.stderr.strip()}")
+            try:
+                shutil.move(tmp_file, tmp_file + ".bad")
+            except Exception:
+                pass
             return
 
-        # Install file into /etc/sudoers.d/
         shutil.move(tmp_file, sudoers_file)
         subprocess.run(["sudo", "chmod", "440", sudoers_file], check=True)
         logger.info(f"Sudoers restriction applied in {sudoers_file}")
 
-        # 4. Configure ops login banner 
+        # 5) Configure ops login banner (your existing helper)
         configure_ops_login_banner(logger)
 
-        # All Done, ops user has been created
-        logger.info("User 'ops' created and configured successfully.")
+        logger.info("User 'ops' created/updated and configured never to auto-lock. ✅")
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Command failed: {e}")

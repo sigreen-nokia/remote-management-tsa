@@ -21,10 +21,22 @@ sudo tail -f /var/log/syslog | grep reverse-ssh
 sudo tail -f /var/log/syslog | grep ssh
 
 
-Client logs
+Client logs, especially usefull if ssh is failing
 ---
 sudo tail -f /var/log/auth.log
+---
 
+Client uses fail2ban, I do exclude the server ip but check it anyway
+---
+sudo fail2ban-client status sshd
+---
+
+Client check the ops account is not locked, I have set it to never lock but you never know.
+---
+sudo chpasswd <<< "ops:$(openssl rand -base64 32)"
+sudo passwd -S ops
+sudo chage -E -1 ops
+---
 
 On the server dump your reverse ssh config, to see if its as expected
 ---
