@@ -9,6 +9,23 @@ On the server get more service status details with
 sudo mgmt-access.py --status --log-level DEBUG
 ---
 
+if the command itself failes rerun in debug, you will get a lot m ore output, some examples. 
+---
+python3 ./mgmt-access.py --install-server --log-level DEBUG
+python3 ./mgmt-access.py --install-client --log-level DEBUG
+
+Server Logs
+----
+sudo tail -f /var/log/syslog | grep autossh
+sudo tail -f /var/log/syslog | grep reverse-ssh
+sudo tail -f /var/log/syslog | grep ssh
+
+
+Client logs
+---
+sudo tail -f /var/log/auth.log
+
+
 On the server dump your reverse ssh config, to see if its as expected
 ---
 sudo cat /etc/systemd/system/reverse-ssh.service
@@ -54,6 +71,13 @@ As you nat to ports 9001 9002, On the server look for ssh packets
 ---
 sudo tcpdump -n -i xxx port 9000
 ---
+
+
+Server setting debug on reverse-ssh
+
+
+
+
 
 
 

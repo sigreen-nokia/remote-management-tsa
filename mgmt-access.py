@@ -1346,23 +1346,28 @@ def remove_ops_user(logger):
         logger.error(f"Unexpected error: {e}")
 
 
-def ensure_ssh_key(logger, ssh_dir, key_name="id_rsa"):
+def ensure_ssh_key(logger, ssh_dir, key_name="id_rsa", user_name):
     """
     Ensure SSH key pair exists for our user.
     If missing, prompt to generate one.
     Then display public key so user can copy it to client.
     """
     private_key = os.path.join(ssh_dir, key_name)
+    logger.info(f"private_key {private_key}")
     public_key = private_key + ".pub"
+    logger.info(f"public_key {public_key}")
 
     if not os.path.exists(public_key):
         logger.info(f"No SSH key found at {public_key}")
         response = input("No SSH key exists. Do you want to generate a new SSH key pair? [y/N]: ").strip().lower()
         if response == "y":
+            #we need to run this as the user not root, to avid permission problems with the tunnel
             try:
                 os.makedirs(ssh_dir, exist_ok=True)
                 subprocess.run(
-                    ["ssh-keygen", "-t", "rsa", "-b", "4096", "-f", private_key, "-N", ""],
+                    ["sudo", "-u", user_name,
+                     "ssh-keygen", "-t", "rsa", "-b", "4096",
+                     "-f", private_key, "-N", ""],
                     check=True
                 )
                 logger.info(f"SSH key pair generated at {private_key} and {public_key}")
@@ -1727,8 +1732,9 @@ def install_server(logger):
     logger.info("  sudo systemctl status reverse-ssh.service")
 
     ssh_dir="/home/" + user_name + "/.ssh" 
+    logger.debug(f"ssh_dir = {ssh_dir}")
     #dump the public key or if its missing offer to create an ssh key pair
-    ensure_ssh_key(logger, ssh_dir)
+    ensure_ssh_key(logger, ssh_dir, user_name)
 
     logger.info("installing mgmt-access.py into directory /usr/local/sbin/mgmt-access.py")
     install_sw(logger)
