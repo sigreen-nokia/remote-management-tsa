@@ -6,3 +6,4 @@ testing-in-vlab*.*
 .lab-name
 *.swp
 *lab*.txt
+testing*.txt
