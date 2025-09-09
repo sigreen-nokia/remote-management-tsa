@@ -1,7 +1,7 @@
 
 ## What is Remote management TSA:
 
-* A client server tool which creates secured reverse SSH tunnels on demand, in line with TSA regs Managagement access requirements. 
+* A client server tool which provides MGMT access on demand, without using any inbound ports. It is written in line with TSA regs Managagement access requirements. 
 * The tool runs on Ubuntu Linux 
 * The created ops user is locked down, only able to run mgmt-access.py 
 * The install options are automated and will prompt you for the configuration values
