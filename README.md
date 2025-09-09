@@ -10,15 +10,14 @@
 * The install options are automated and will prompt you for the configuration values
 
 ```
-pip install -r ./requirements.txt
-
 #help
 python3 mgmt-access.py --help
 
 #install the server (where the reverse ssh service will be started and stopped by ops user)
 #this can be ran safely on a DCU
-python3 mgmt-access.py --add-ops-user  
+pip install -r ./requirements.txt
 python3 mgmt-access.py --install-server
+python3 mgmt-access.py --add-ops-user  
 
 #install the client instance: this is a minimal ubuntu 24.04 + ssh, one ip is enough. 
 python3 mgmt-access.py --add-ops-user  
@@ -44,6 +43,9 @@ python3 mgmt-access.py --status
 
 #detailed status 
 python3 mgmt-access.py --status --log-level DEBUG
+
+#uninstall the server
+python3 mgmt-access.py --uninstall-client
 
 ```
 
