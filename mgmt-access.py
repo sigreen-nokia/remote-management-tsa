@@ -1734,7 +1734,7 @@ def install_server(logger):
     ssh_dir="/home/" + user_name + "/.ssh" 
     logger.debug(f"ssh_dir = {ssh_dir}")
     #check and print the public key or if its missing offer to create an ssh key pair
-    ensure_ssh_key(logger, user_name, ssh_dir)
+    ensure_ssh_key(logger, ssh_dir, user_name)
 
     logger.info("installing mgmt-access.py into directory /usr/local/sbin/mgmt-access.py")
     install_sw(logger)
