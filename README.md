@@ -1,6 +1,9 @@
 
 ## What is Remote management TSA:
 
+![Alt text](images/process.png)
+
+
 * A client server tool which provides MGMT access on demand, without using any inbound ports. It is written in line with TSA regs Managagement access requirements. 
 * The tool runs on Ubuntu Linux 
 * The created ops user is locked down, only able to run mgmt-access.py 
