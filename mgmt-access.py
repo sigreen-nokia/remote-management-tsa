@@ -1346,9 +1346,9 @@ def remove_ops_user(logger):
         logger.error(f"Unexpected error: {e}")
 
 
-def ensure_ssh_key(logger, ssh_dir="/home/support/.ssh", key_name="id_rsa"):
+def ensure_ssh_key(logger, ssh_dir, key_name="id_rsa"):
     """
-    Ensure SSH key pair exists for support user.
+    Ensure SSH key pair exists for our user.
     If missing, prompt to generate one.
     Then display public key so user can copy it to client.
     """
@@ -1488,6 +1488,58 @@ def select_nat_interface(logger):
     logger.info(f"Selected interface '{chosen}' for NAT/masquerading.")
     return chosen
 
+
+def get_invoking_username(logger=None, prefer_sudo_original=True) -> str:
+    """
+    Return the username the script was run from.
+
+    - If invoked via sudo and prefer_sudo_original=True, returns $SUDO_USER (non-root).
+    - Otherwise returns the current user (tries login/env, then euid/uid).
+    Raises RuntimeError if it cannot determine a username.
+    """
+    # Prefer the original user when running under sudo
+    if prefer_sudo_original:
+        sudo_user = os.environ.get("SUDO_USER")
+        if sudo_user and sudo_user != "root":
+            if logger: logger.debug(f"SUDO_USER detected -> {sudo_user}")
+            return sudo_user
+
+    # Try a few reliable fallbacks
+    try:
+        name = os.getlogin()
+        if name:
+            if logger: logger.debug(f"os.getlogin() -> {name}")
+            return name
+    except Exception as e:
+        if logger: logger.debug(f"os.getlogin() failed: {e}")
+
+    try:
+        name = getpass.getuser()
+        if name:
+            if logger: logger.debug(f"getpass.getuser() -> {name}")
+            return name
+    except Exception as e:
+        if logger: logger.debug(f"getpass.getuser() failed: {e}")
+
+    try:
+        name = pwd.getpwuid(os.geteuid()).pw_name
+        if name:
+            if logger: logger.debug(f"pwd.getpwuid(euid) -> {name}")
+            return name
+    except Exception as e:
+        if logger: logger.debug(f"pwd.getpwuid(euid) failed: {e}")
+
+    try:
+        name = pwd.getpwuid(os.getuid()).pw_name
+        if name:
+            if logger: logger.debug(f"pwd.getpwuid(uid) -> {name}")
+            return name
+    except Exception as e:
+        if logger: logger.debug(f"pwd.getpwuid(uid) failed: {e}")
+
+    raise RuntimeError("Could not determine invoking username")
+
+
 def get_ipv4_addr(logger, iface: str):
     """
     Return the IPv4 address (no CIDR) for the given Linux interface name.
@@ -1576,6 +1628,10 @@ def install_server(logger):
     logger.info(f"UI forwarding will use the +2 port: {CLIENT_UI_PORT_FORWARD}")
     CLIENT_FQDN_OR_IP             = get_persistent_config(logger, "CLIENT_FQDN_OR_IP", "10.20.30.40")
 
+    #get the username who ran us
+    user_name = get_invoking_username(logger)
+    logger.debug(f"Invoked by: {user_name}")
+
     # The host alias used by autossh (matches the Host entry we write below).
     AUTOSSH_HOST_ALIAS = CLIENT_FQDN_OR_IP  
 
@@ -1585,7 +1641,7 @@ def install_server(logger):
 
     # --- Helpers ---
 
-    def write_file_with_sudo(dest_path, content):
+    def write_file_with_sudo(dest_path, content, user_name):
         # Use a here-doc via tee to avoid worrying about root file perms.
         heredoc = content.replace("$", r"\$")  # prevent shell from expanding $ in content
         cmd = f"bash -lc 'cat > {shlex.quote(dest_path)} <<\"EOF\"\n{heredoc}\nEOF\nchmod 0644 {shlex.quote(dest_path)}'"
@@ -1604,7 +1660,7 @@ def install_server(logger):
     ssh_cfg_content = textwrap.dedent(f"""\
         Host {CLIENT_FQDN_OR_IP}
             HostName {CLIENT_FQDN_OR_IP}
-            IdentityFile /home/support/.ssh/id_rsa
+            IdentityFile /home/{user_name}/.ssh/id_rsa
             User ops 
             Port {CLIENT_SSH_TUNNEL_PORT}
             RemoteForward {CLIENT_SSH_PORT_FORWARD} 127.0.0.1:22
@@ -1614,7 +1670,7 @@ def install_server(logger):
     """)
     try:
         logger.info(f"Writing SSH config: {ssh_cfg_path}")
-        write_file_with_sudo(ssh_cfg_path, ssh_cfg_content)
+        write_file_with_sudo(ssh_cfg_path, ssh_cfg_content, user_name)
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to write {ssh_cfg_path}: {e}")
         return False
@@ -1626,7 +1682,7 @@ def install_server(logger):
         After=network-online.target
 
         [Service]
-        User=support
+        User={user_name}
         ExecStart=/usr/bin/autossh -M 0 -N -q -o "ServerAliveInterval=60" -o "ServerAliveCountMax=3" -o "StrictHostKeyChecking=no" {AUTOSSH_HOST_ALIAS}
         ExecStop=/usr/bin/killall -s KILL autossh
         Restart=always
@@ -1637,7 +1693,7 @@ def install_server(logger):
     """)
     try:
         logger.info(f"Writing systemd unit: {unit_path}")
-        write_file_with_sudo(unit_path, unit_content)
+        write_file_with_sudo(unit_path, unit_content, user_name)
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to write {unit_path}: {e}")
         return False
@@ -1663,15 +1719,16 @@ def install_server(logger):
         return False
 
     logger.info("Note: to test autossh")
-    logger.info(f"ssh support@{CLIENT_FQDN_OR_IP} -p {CLIENT_SSH_TUNNEL_PORT}")
+    logger.info(f"ssh ops@{CLIENT_FQDN_OR_IP} -p {CLIENT_SSH_TUNNEL_PORT}")
     logger.info(f"autossh {AUTOSSH_HOST_ALIAS}")
     logger.info("Service has been installed. Useful commands:")
     logger.info("  sudo systemctl start reverse-ssh.service")
     logger.info("  sudo systemctl stop reverse-ssh.service")
     logger.info("  sudo systemctl status reverse-ssh.service")
-    
+
+    ssh_dir="/home/" + user_name + "/.ssh" 
     #dump the public key or if its missing offer to create an ssh key pair
-    ensure_ssh_key(logger)
+    ensure_ssh_key(logger, ssh_dir)
 
     logger.info("installing mgmt-access.py into directory /usr/local/sbin/mgmt-access.py")
     install_sw(logger)
@@ -1692,9 +1749,13 @@ def uninstall_server(logger):
       2) stop & disable reverse-ssh.service; remove its files
       3) remove /usr/local/sbin/mgmt-access.py
       7) systemctl daemon-reload
-      8) prompt to delete /home/support/remote-management-tsa
+      8) prompt to delete /home/{user_name}/remote-management-tsa
       9) log note about pip-installed argparse
     """
+    #get the user name who ran this 
+    user_name = get_invoking_username(logger)
+    logger.info(f"Invoked by: {user_name}")
+
     logger.info("Starting server uninstallation…")
 
     # 1) Remove 'ops' user
@@ -1724,7 +1785,7 @@ def uninstall_server(logger):
     run("sudo systemctl daemon-reload", check=False, logger=logger)
 
     # 8) Optionally delete the Git working directory
-    repo_dir = Path("/home/support/remote-management-tsa")
+    repo_dir = Path("/home/" + user_name + "/remote-management-tsa")
     try:
         if repo_dir.exists() and repo_dir.is_dir():
             ans = input(
@@ -1756,7 +1817,7 @@ def install_client(logger):
     Prepare a client host for secure reverse-SSH access.
 
       - Reads persisted config via get_persistent_config (which handles prompting/persistence)
-      - Appends server's SSH public key to /home/support/.ssh/authorized_keys
+      - Appends server's SSH public key to /home/{user_name}/.ssh/authorized_keys
       - Hardens sshd: disable password/PAM, disable challenge-response, enable GatewayPorts, set Port=<CLIENT_SSH_TUNNEL_PORT>
       - Restarts ssh service
       - Installs & configures UFW rules (22 from SSH_ALLOWED_IP; and 3 ports for ops user access and forwarding)
@@ -1783,6 +1844,7 @@ def install_client(logger):
 
 
     # --- 1) authorized_keys for ops user --------------------------------
+    logger.info("Note: Your existing users .ssh/ directory will be untouched.")
     logger.info("adding ssh authorized_keys for the ops user.")
     ops_home = Path("/home/ops")
     ssh_dir = ops_home / ".ssh"
@@ -1797,12 +1859,14 @@ def install_client(logger):
     if SERVER_SSH_PUB_KEY.strip():
         append_if_missing_line(auth_keys, SERVER_SSH_PUB_KEY.strip(), logger)
         os.chmod(auth_keys, 0o600)
+        logger.info("I have added SERVER_SSH_PUB_KEY for the ops user. This will allow the tunnel to come up")
     else:
         logger.warning("SERVER_SSH_PUB_KEY is empty; skipping initial authorized_keys append.")
 
     # Optionally import ssh public keys from file(s)
     while True:
-        ans = input("Import additional public keys for the ops user from a file? [y/N]: ").strip().lower()
+        logger.info("You may optionally wish to add additional public ssh keys to the ops user just to assist with your testing")
+        ans = input("Import additional public keys to assist with testing the ops user. Taken from a file? [y/N]: ").strip().lower()
         if ans != "y":
             break
         path_in = input("Enter the path to the file containing public keys: ").strip()
@@ -1813,7 +1877,7 @@ def install_client(logger):
 
     # Repeatedly prompt for any additional single keys
     while True:
-        ans = input("Do you want to add another public SSH key for user 'ops'? [y/N]: ").strip().lower()
+        ans = input("Paste additional public SSH keys to help with testing the ops user? [y/N]: ").strip().lower()
         if ans != "y":
             break
     

@@ -1,0 +1,62 @@
+
+The following command shows the server connection status, it shoudl show up 
+---
+sudo mgmt-access.py --status 
+---
+
+On the server get more service status details with 
+---
+sudo mgmt-access.py --status --log-level DEBUG
+---
+
+On the server dump your reverse ssh config, to see if its as expected
+---
+sudo cat /etc/systemd/system/reverse-ssh.service
+---
+
+On the server try a simmilar ssh towards the client,  to see if you have connectivity issues
+---
+ssh -p 9000 ops@x.x.x.x
+---
+
+on the client trace the inbound ssh packets to see if they make it
+---
+sudo tcpdump -n -i ens3 port 9000
+---
+
+on the server dump the service configuration to see if it is as expected
+---
+sudo cat /etc/ssh/ssh_config.d/auto-ssh-systemd-hosts.conf
+---
+
+on the client check the status 
+---
+sudo mgmt-access.py --status
+sudo mgmt-access.py --status --log-level DEBUG
+---
+
+on the client check the key is correct 
+---
+sudo cat /home/ops/.ssh/authorized_keys
+vs on the server 
+cat ~/.ssh/authorized_keys
+---
+
+connect from the internet to the client instance.
+---
+vpn up
+check you have the correct route and the traffic routes via the vpn tunnel
+then ssh into the client instance 
+ssh -p 9000 ops@x.x.x.x   #this required you public key to be in /home/ops/.ssh/authorized_keys
+---
+
+As you nat to ports 9001 9002, On the server look for ssh packets 
+---
+sudo tcpdump -n -i xxx port 9000
+---
+
+
+
+
+
+
