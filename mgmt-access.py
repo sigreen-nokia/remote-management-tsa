@@ -1393,6 +1393,7 @@ def remove_ops_user(logger):
 #
 #    return True
 
+
 def ensure_ssh_key(logger, ssh_dir, user_name, key_name="id_rsa"):
     """
     Ensure SSH key pair exists for user_name at ssh_dir.
@@ -1403,9 +1404,8 @@ def ensure_ssh_key(logger, ssh_dir, user_name, key_name="id_rsa"):
         logger.error("ensure_ssh_key: user_name is required")
         return False
 
-    # Validate user exists and resolve home (not strictly needed if ssh_dir is absolute)
     try:
-        pw = pwd.getpwnam(user_name)
+        pwd.getpwnam(user_name)
     except KeyError:
         logger.error(f"User '{user_name}' does not exist.")
         return False
@@ -1413,9 +1413,7 @@ def ensure_ssh_key(logger, ssh_dir, user_name, key_name="id_rsa"):
     private_key = os.path.join(ssh_dir, key_name)
     public_key  = private_key + ".pub"
 
-    logger.debug(f"ensure_ssh_key for {user_name}: private={private_key}, public={public_key}")
-
-    # Ensure the .ssh directory exists and is owned by the user (NOT root)
+    # ensure ~/.ssh exists and is owned by the user (not root)
     try:
         subprocess.run(
             ["sudo", "install", "-d", "-m", "700", "-o", user_name, "-g", user_name, ssh_dir],
@@ -1430,43 +1428,37 @@ def ensure_ssh_key(logger, ssh_dir, user_name, key_name="id_rsa"):
         response = input(f"No SSH key exists for {user_name}. Generate a new SSH key pair? [y/N]: ").strip().lower()
         if response == "y":
             try:
-                # Generate as the user; -H sets HOME to user's home
+                # generate as the target user; -H sets HOME appropriately
                 subprocess.run(
                     ["sudo", "-H", "-u", user_name,
                      "ssh-keygen", "-t", "rsa", "-b", "4096",
                      "-f", private_key, "-N", "", "-q"],
                     check=True
                 )
-
-                # Normalize ownership & permissions
+                # normalize ownership & perms
                 subprocess.run(["sudo", "chown", f"{user_name}:{user_name}", private_key, public_key], check=True)
                 subprocess.run(["sudo", "chmod", "600", private_key], check=True)
                 subprocess.run(["sudo", "chmod", "644", public_key], check=True)
-
                 logger.info(f"SSH key pair generated at {private_key} and {public_key} (owner={user_name})")
-            } except subprocess.CalledProcessError as e:
+            except subprocess.CalledProcessError as e:
                 logger.error(f"Failed to generate SSH key pair for {user_name}: {e}")
                 return False
         else:
             logger.warning("User declined to generate SSH key. Skipping.")
             return False
 
-    # Show the public key
-    if os.path.exists(public_key):
-        try:
-            with open(public_key, "r", encoding="utf-8") as f:
-                pubkey = f.read().strip()
-            print("\n=== This is your public key ===")
-            print(pubkey)
-            print("\n===============================\n"
-                  "Note it down as you will need this when configuring the client-instance.\n")
-            logger.info("Displayed public key to user.")
-            return True
-        except Exception as e:
-            logger.error(f"Could not read public key {public_key}: {e}")
-            return False
-    else:
-        logger.error("Public key still missing after attempted generation.")
+    # show the public key
+    try:
+        with open(public_key, "r", encoding="utf-8") as f:
+            pubkey = f.read().strip()
+        print("\n=== This is your public key ===")
+        print(pubkey)
+        print("\n===============================\n"
+              "Note it down as you will need this when configuring the client-instance.\n")
+        logger.info("Displayed public key to user.")
+        return True
+    except Exception as e:
+        logger.error(f"Could not read public key {public_key}: {e}")
         return False
 
 
