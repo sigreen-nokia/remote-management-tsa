@@ -4,10 +4,17 @@
 ![Alt text](images/process.png)
 
 
-* A client server tool which provides MGMT access on demand, without using any inbound ports. It is written in line with TSA regs Managagement access requirements. 
+* A client server tool which provides MGMT access on demand, without using any inbound ports. 
+* It is written in line with TSA regs, specifically Managagement Access Requirements. 
 * The tool runs on Ubuntu Linux 
 * The created ops user is locked down, only able to run mgmt-access.py 
 * The install options are automated and will prompt you for the configuration values
+* All values are configurable during the installation
+* The default outbound port from the mgmt_server to the mgmt_client is 9000 tcp (no inbound ports are required)
+* The default lan ports into the client, which are used for server access, are:
+*           22 admin ssh access to the client 
+*           9001 direct ssh access to the server on port 22 
+*           9002 direct UI access to the server on port 443  
 
 ```
 #help
