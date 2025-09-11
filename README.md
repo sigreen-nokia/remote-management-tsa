@@ -13,9 +13,9 @@
 * All values are configurable during the installation
 * The default outbound port from the mgmt_server to the mgmt_client is 9000 tcp (no inbound ports are required)
 * The default lan ports into the client, which are used for server access, are:
-- 22 admin ssh access to the client 
-- 9001 direct ssh access to the server on port 22 
-- 9002 direct UI access to the server on port 443  
+  * 22 admin ssh access to the client 
+  * 9001 direct ssh access to the server on port 22 
+  * 9002 direct UI access to the server on port 443  
 
 ```
 #help
