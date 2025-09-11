@@ -6,8 +6,9 @@
 
 * A client server tool which provides MGMT access on demand, without using any inbound ports. 
 * It is written in line with TSA regs, specifically Managagement Access Requirements. 
-* The tool runs on Ubuntu Linux 
 * The created ops user is locked down, only able to run mgmt-access.py 
+* Everything is daemon based, so will survive restarts etc. 
+* The tool runs on Ubuntu Linux 
 * The install options are automated and will prompt you for the configuration values
 * All values are configurable during the installation
 * The default outbound port from the mgmt_server to the mgmt_client is 9000 tcp (no inbound ports are required)
@@ -20,8 +21,7 @@
 #help
 python3 mgmt-access.py --help
 
-#install the server (where the reverse ssh service will be started and stopped by ops user)
-#this can be ran safely on a DCU
+#install the server (this is the on prem Linux server you want to access remotely)
 pip install -r ./requirements.txt
 python3 mgmt-access.py --install-server
 python3 mgmt-access.py --add-ops-user  
@@ -54,5 +54,6 @@ python3 mgmt-access.py --status --log-level DEBUG
 #uninstall the server
 python3 mgmt-access.py --uninstall-client
 
+#logs go to /var/log/syslog
 ```
 
