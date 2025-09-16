@@ -33,19 +33,19 @@ python3 mgmt-access.py --install-client
 #start the remote mamagement service for 24 hours, usually ran by the ops user
 python3 mgmt-access.py --on 
 
-#start the remote management service for the specified number of hours 
+#start the remote management service for the specified number of hours, usually ran by the ops user 
 python3 mgmt-access.py --on --timer-override 99 
 
-#start the remote management service, run untill manually stopped with --off 
+#start the remote management service, run untill manually stopped with --off, usually ran by the ops user 
 python3 mgmt-access.py --on --timer-override 0 
 
-#stop the remote mamagement service, usually ran by the ops user
+#stop the remote mamagement service, usually ran by the ops user, usually ran by the ops user
 python3 mgmt-access.py --off
 
 #remove the ops user
 python3 mgmt-access.py --remove-ops-user
 
-#status (the status output will change when it is ran on a server vs a client)
+#status (the status output will change when it is ran on a server vs a client), , usually ran by the ops user
 python3 mgmt-access.py --status
 
 #detailed status 
