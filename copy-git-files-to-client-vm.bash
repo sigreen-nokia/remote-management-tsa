@@ -1,4 +1,5 @@
 #!/bin/bash
+
 # File to store the lab name
 CLIENT_FILE=".client-name"
 # Read the current value if the file exists

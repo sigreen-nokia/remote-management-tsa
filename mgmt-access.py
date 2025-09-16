@@ -183,45 +183,6 @@ def run(cmd, check=True, capture_output=False, logger=None):
 
 
 
-
-
-
-#def run(cmd, check=True, capture_output=False, logger=None):
-#    """
-#    Wrapper for running shell commands.
-#
-#    - Uses run_cmd(logger, cmd, check, capture_output) if defined in the module.
-#    - Falls back to subprocess.run().
-#    - Accepts str or list for cmd.
-#    - Provides optional capture_output (stdout/stderr).
-#    - Logs at DEBUG/INFO if logger is provided.
-#    """
-#    # Prefer custom run_cmd() if present
-#    try:
-#        if "run_cmd" in globals():
-#            return run_cmd(logger, cmd, check=check, capture_output=capture_output)  # type: ignore[name-defined]
-#    except Exception:
-#        pass
-#
-#    # Fallback: subprocess.run
-#    if logger:
-#        level = logger.debug if capture_output else logger.info
-#        level(f"RUN: {cmd}")
-#
-#    # Decide how to run command
-#    if isinstance(cmd, str):
-#        cmd_list = shlex.split(cmd)
-#    else:
-#        cmd_list = cmd
-#
-#    return subprocess.run(
-#        cmd_list,
-#        check=check,
-#        capture_output=capture_output,
-#        text=True,
-#    )
-
-
 def ensure_ipv4_forwarding_enabled(logger):
     """
     On Ubuntu, ensure kernel IPv4 forwarding is enabled.
@@ -791,92 +752,6 @@ def configure_ufw_ssh_from_private(logger):
 
 
 
-#def configure_ufw_ssh_from_private(logger):
-#    """
-#    Prompt for each RFC1918 subnet and, if confirmed, allow SSH (22/tcp) from it via UFW.
-#    Then interactively prompt for any additional IPv4 subnets/IPs to allow.
-#    """
-#    private_subnets = [
-#        "10.0.0.0/8",
-#        "172.16.0.0/12",
-#        "192.168.0.0/16",
-#    ]
-#
-#    # Check if ufw exists
-#    try:
-#        result = run("ufw --version", check=False, capture_output=True, logger=logger)
-#        if result.returncode != 0:
-#            logger.error("UFW does not appear to be installed. Install it with: sudo apt-get install ufw")
-#            return
-#    except Exception as e:
-#        logger.error(f"Failed to check UFW availability: {e}")
-#        return
-#
-#    logger.info("Configuring UFW to allow SSH (tcp/22) from selected private source IPv4 ranges.")
-#
-#    # RFC1918 prompts
-#    for cidr in private_subnets:
-#        ans = input(f"Allow SSH (tcp/22) from {cidr}? [y/N]: ").strip().lower()
-#        if ans == "y":
-#            cmd = f"sudo ufw allow from {cidr} to any port 22 proto tcp"
-#            logger.info(f"Adding rule: {cmd}")
-#            run(cmd, check=True, logger=logger)
-#        else:
-#            logger.info(f"Skipped {cidr}")
-#
-#    # Additional manual subnets/IPs
-#    logger.info("You can add additional IPv4 subnets or single IPs to allow SSH from.")
-#    while True:
-#        more = input("Add another IPv4 subnet or IP (e.g., 203.0.113.0/24 or 203.0.113.5)? [y/N]: ").strip().lower()
-#        if more != "y":
-#            break
-#
-#        entry = input("Enter IPv4 subnet or single IPv4 address: ").strip()
-#        if not entry:
-#            logger.warning("Empty input; not adding a rule.")
-#            continue
-#
-#        # Validate input as IPv4 network or IPv4 address
-#        norm = None
-#        try:
-#            if "/" in entry:
-#                net = ipaddress.IPv4Network(entry, strict=False)
-#                norm = str(net)
-#            else:
-#                ip = ipaddress.IPv4Address(entry)
-#                norm = str(ip)  # UFW accepts bare IPs; no /32 needed
-#        except ValueError:
-#            logger.error(f"Invalid IPv4 subnet/IP: {entry!r}. Please try again.")
-#            continue
-#
-#        # Extra caution for open-to-world
-#        if norm == "0.0.0.0/0":
-#            confirm = input("WARNING: This opens SSH to the entire Internet (0.0.0.0/0). Type YES to proceed: ").strip()
-#            if confirm != "YES":
-#                logger.info("Skipped 0.0.0.0/0.")
-#                continue
-#
-#        cmd = f"sudo ufw allow from {norm} to any port 22 proto tcp"
-#        logger.info(f"Adding rule: {cmd}")
-#        try:
-#            run(cmd, check=True, logger=logger)
-#        except Exception as e:
-#            logger.error(f"Failed to add rule for {norm}: {e}")
-#
-#    # Show current rules
-#    run("sudo ufw status numbered", check=False, logger=logger)
-#
-#    # Check if ufw is active
-#    result = run("sudo ufw status", check=False, capture_output=True, logger=logger)
-#    if "inactive" in (result.stdout or "").lower():
-#        ans = input("UFW is inactive. Enable it now? [y/N]: ").strip().lower()
-#        if ans == "y":
-#            logger.info("Enabling UFW…")
-#            run("sudo ufw enable", check=True, logger=logger)
-#        else:
-#            logger.warning("UFW remains inactive. Rules will not take effect until UFW is enabled.")
-
-
 def get_persistent_config(logger, varname, default, prompt=True, cast=None):
     """
     Get a persistent config value for `varname`.
@@ -1070,51 +945,6 @@ def _remove_all_at_jobs(logger):
 
 
 
-#def show_status(logger):
-#    """
-#    Show reverse-ssh.service status if present.
-#    If log level is DEBUG, dump full `systemctl status` output.
-#    """
-#    logger.info("Checking the status of the Remote Access Management Service...")
-#    service = "reverse-ssh.service"
-#
-#    logger.debug(f"Checking for {service}...")
-#
-#    try:
-#        # Check if service exists
-#        result = subprocess.run(
-#            ["systemctl", "list-unit-files", service],
-#            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
-#        )
-#        if service not in result.stdout:
-#            logger.error(f"{service} not found on this system. Aborting.")
-#            return
-#
-#        logger.debug(f"{service} found. Checking status...")
-#
-#        # If DEBUG → dump full status output
-#        if logger.isEnabledFor(logging.DEBUG):
-#            full_status = subprocess.run(
-#                ["systemctl", "status", service],
-#                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
-#            )
-#            logger.debug(f"Full systemctl status for {service}:\n{full_status.stdout.strip()}")
-#        else:
-#            # Only check active state
-#            status_check = subprocess.run(
-#                ["systemctl", "is-active", service],
-#                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
-#            )
-#            state = status_check.stdout.strip()
-#
-#            if state == "active":
-#                logger.info(f"{service} is running ✅")
-#            else:
-#                logger.warning(f"{service} is NOT running (state={state})")
-#
-#    except subprocess.CalledProcessError as e:
-#        logger.error(f"Error managing {service}: {e.stderr.strip()}")
-
 
 import logging
 from pathlib import Path
@@ -1295,77 +1125,6 @@ def timer_override(value):
     print(f"Applying timer override: {value}")
 
 
-#def add_ops_user(logger):
-#    """
-#    Create a restricted user 'ops' who can only run:
-#        sudo /usr/local/sbin/mgmt-access.py
-#
-#    Additions:
-#      - Prompts for and sets a password for 'ops'.
-#      - Configures login shell to run '/usr/local/sbin/mgmt-access.py --help'.
-#    """
-#    try:
-#        # 1. Check if user exists
-#        result = subprocess.run(
-#            ["id", "-u", "ops"],
-#            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-#        )
-#        if result.returncode == 0:
-#            logger.info("User 'ops' already exists.")
-#        else:
-#            # Create the user with /bin/bash shell
-#            subprocess.run(["sudo", "useradd", "-m", "-s", "/bin/bash", "ops"], check=True)
-#            logger.info("Created user 'ops'.")
-#
-#        # 2. Prompt for password and set it
-#        password = getpass.getpass("Enter password for user 'ops': ")
-#        confirm = getpass.getpass("Confirm password: ")
-#        if password != confirm:
-#            logger.error("Passwords do not match. Aborting.")
-#            return
-#
-#        # Use chpasswd to set password
-#        subprocess.run(
-#            ["sudo", "chpasswd"],
-#            input=f"ops:{password}",
-#            text=True,
-#            check=True
-#        )
-#        logger.info("Password set for user 'ops'.")
-#
-#        # 3. Prepare sudoers file
-#        sudoers_file = "/etc/sudoers.d/ops"
-#        rule = "ops ALL=(ALL) NOPASSWD: /usr/local/sbin/mgmt-access.py\n"
-#
-#        # Write rule atomically via visudo -cf check
-#        tmp_file = "/tmp/ops_sudoers"
-#        with open(tmp_file, "w", encoding="utf-8") as f:
-#            f.write(rule)
-#
-#        # Validate syntax with visudo
-#        check = subprocess.run(
-#            ["sudo", "visudo", "-cf", tmp_file],
-#            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-#        )
-#        if check.returncode != 0:
-#            logger.error(f"visudo check failed: {check.stderr}")
-#            return
-#
-#        # Install file into /etc/sudoers.d/
-#        shutil.move(tmp_file, sudoers_file)
-#        subprocess.run(["sudo", "chmod", "440", sudoers_file], check=True)
-#        logger.info(f"Sudoers restriction applied in {sudoers_file}")
-#
-#        # 4. Configure ops login banner 
-#        configure_ops_login_banner(logger)
-#
-#        # All Done, ops user has been created
-#        logger.info("User 'ops' created and configured successfully.")
-#
-#    except subprocess.CalledProcessError as e:
-#        logger.error(f"Command failed: {e}")
-#    except Exception as e:
-#        logger.error(f"Unexpected error: {e}")
 
 
 def add_ops_user(logger):
@@ -1489,52 +1248,6 @@ def remove_ops_user(logger):
         logger.error(f"Unexpected error: {e}")
 
 
-#def ensure_ssh_key(logger, ssh_dir, user_name, key_name="id_rsa"):
-#    """
-#    Ensure SSH key pair exists for our user.
-#    If missing, prompt to generate one.
-#    Then display public key so user can copy it to client.
-#    """
-#    private_key = os.path.join(ssh_dir, key_name)
-#    logger.info(f"private_key {private_key}")
-#    public_key = private_key + ".pub"
-#    logger.info(f"public_key {public_key}")
-#
-#    if not os.path.exists(public_key):
-#        logger.info(f"No SSH key found at {public_key}")
-#        response = input("No SSH key exists. Do you want to generate a new SSH key pair? [y/N]: ").strip().lower()
-#        if response == "y":
-#            #we need to run this as the user not root, to avid permission problems with the tunnel
-#            try:
-#                os.makedirs(ssh_dir, exist_ok=True)
-#                subprocess.run(
-#                    ["sudo", "-u", user_name,
-#                     "ssh-keygen", "-t", "rsa", "-b", "4096",
-#                     "-f", private_key, "-N", ""],
-#                    check=True
-#                )
-#                logger.info(f"SSH key pair generated at {private_key} and {public_key}")
-#            except subprocess.CalledProcessError as e:
-#                logger.error(f"Failed to generate SSH key pair: {e}")
-#                return False
-#        else:
-#            logger.warning("User declined to generate SSH key. Skipping.")
-#            return False
-#
-#    # Show the public key
-#    if os.path.exists(public_key):
-#        with open(public_key, "r") as f:
-#            pubkey = f.read().strip()
-#        print("\n=== This is your public key ===")
-#        print(pubkey)
-#        print("\n==========================-=====")
-#        print("Note it down as you will need this when configuring the client-instance.\n")
-#        logger.info("Displayed public key to user.")
-#    else:
-#        logger.error("Public key still missing after attempted generation.")
-#        return False
-#
-#    return True
 
 
 def ensure_ssh_key(logger, ssh_dir, user_name, key_name="id_rsa"):

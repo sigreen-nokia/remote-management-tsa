@@ -1,4 +1,5 @@
 #!/bin/bash
+
 # File to store the lab name
 LAB_FILE=".lab-name"
 # Read the current value if the file exists
@@ -17,9 +18,9 @@ else
     echo "$INPUT_NAME" > "$LAB_FILE"
 fi
 # Print what we’re using
-echo "Using: VLAB $INPUT_NAME"
+echo "Using: LAB $INPUT_NAME"
 CURRENT_DIR="$PWD"
 #copy just the files we need
-scp ./requirements.txt support@$INPUT_NAME:/home/support/remote-management-tsa/
-scp ./mgmt-access.py support@$INPUT_NAME:/home/support/remote-management-tsa/
+scp support@$INPUT_NAME:/home/support/remote-management-tsa/requirements.txt . 
+scp support@$INPUT_NAME:/home/support/remote-management-tsa/mgmt-access.py support@$INPUT_NAME:/home/support/remote-management-tsa/mgmt-access.py .
 
