@@ -1,5 +1,5 @@
 
-The following command shows the server connection status, it shoudl show up 
+The following command shows the server connection status, it should show as up 
 ---
 sudo mgmt-access.py --status 
 ---
@@ -8,6 +8,7 @@ On the server get more service status details with
 ---
 sudo mgmt-access.py --status --log-level DEBUG
 ---
+It should show a stable connection. A new pid every couple of minutes means ssh is failing. 
 
 if the command itself failes rerun in debug, you will get a lot m ore output, some examples. 
 ---
@@ -84,8 +85,18 @@ As you nat to ports 9001 9002, On the server look for ssh packets
 sudo tcpdump -n -i xxx port 9000
 ---
 
+to see the firewall rules on the client 
+---
+sudo ufw status
 
-Server setting debug on reverse-ssh
+---
+Example modify ufw ip addresses: 
+---
+#Flush the rules:
+sudo ufw reset
+#then reinstall the client, which will recreate the rules using the new parameters
+sudo python3 ./mgmt-access.py --install-client
+
 
 
 

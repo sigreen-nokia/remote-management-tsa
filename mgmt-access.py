@@ -1877,7 +1877,7 @@ def install_client(logger):
     logger.info(f"By default, ssh will be locked down to only allow ssh port 22 access from the following source addresses")
     logger.info(f"from the SSH_ALLOWED_IP {SSH_ALLOWED_IP}")
     logger.info(f"from the SERVER_IP {SERVER_IP}")
-    logger.info(f"Would you like me to enable ssh from other private ipv4 subnets to help with your testing (these ufw rules should be removed once finished)")
+    logger.info(f"Would you like me to enable ssh and nat from other secured private ipv4 subnets")
     subnets = configure_ufw_ssh_from_private(logger)
     logger.debug(f"UFW user selected subnets = {subnets}")
     #open up those subnets for port 22
