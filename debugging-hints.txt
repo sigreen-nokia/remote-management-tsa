@@ -51,7 +51,7 @@ ssh -p 9000 ops@x.x.x.x
 
 on the client trace the inbound ssh packets to see if they make it
 ---
-sudo tcpdump -n -i ens3 port 9000
+sudo tcpdump -n -i eth0 port 9000
 ---
 
 on the server dump the service configuration to see if it is as expected
@@ -89,6 +89,11 @@ to see the firewall rules on the client
 ---
 sudo ufw status
 
+if you need to add a rule
+---
+sudo ufw allow from 193.113.57.21 to any port 9000 proto tcp
+sudo ufw status | grep 9000
+             
 ---
 Example modify ufw ip addresses: 
 ---

@@ -6,6 +6,7 @@
 
 * A client server tool which provides MGMT access on demand, without using any inbound ports. 
 * It is written in line with TSA regs, specifically Managagement Access Requirements. 
+* Access is initiated by the customer operations engineer using one command on a dedicated ops user account, for a specified duration.
 * The created ops user is locked down, only able to run mgmt-access.py 
 * Everything is daemon based, so will survive restarts etc. 
 * The tool runs on Ubuntu Linux 
