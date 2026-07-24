@@ -1,0 +1,31 @@
+Port 9000
+ListenAddress 0.0.0.0
+
+Protocol 2
+UsePAM no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PermitEmptyPasswords no
+PermitRootLogin no
+PubkeyAuthentication yes
+
+AuthorizedKeysFile .ssh/authorized_keys
+
+AllowTcpForwarding remote
+GatewayPorts yes
+PermitTunnel no
+X11Forwarding no
+AllowAgentForwarding no
+
+ClientAliveInterval 60
+ClientAliveCountMax 3
+TCPKeepAlive yes
+
+PidFile /run/sshd/sshd.pid
+LogLevel VERBOSE
+
+HostKey /etc/ssh/host-keys/ssh_host_ed25519_key
+HostKey /etc/ssh/host-keys/ssh_host_rsa_key
+
+Subsystem sftp internal-sftp

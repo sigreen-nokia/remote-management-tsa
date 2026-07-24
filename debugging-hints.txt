@@ -49,6 +49,14 @@ On the server try a simmilar ssh towards the client,  to see if you have connect
 ssh -p 9000 ops@x.x.x.x
 ---
 
+On the client you can access the tunnel directly without access to the external nat 
+ssh support@[client public ip]
+ssh -p 9001 support@[client provate ip]
+password: xxxx 
+
+
+
+
 on the client trace the inbound ssh packets to see if they make it
 ---
 sudo tcpdump -n -i eth0 port 9000
@@ -101,6 +109,27 @@ Example modify ufw ip addresses:
 sudo ufw reset
 #then reinstall the client, which will recreate the rules using the new parameters
 sudo python3 ./mgmt-access.py --install-client
+
+---
+Scheduling 
+---
+
+#When you run: 
+
+sudo mgmt-access.py --on --timer-override 168
+
+#A job is setup stop mgmt access in 168 hours.. 
+/usr/local/sbin/mgmt-access.py --off to run once after timer_override hours.  
+
+#You can see the stop jobs as follows
+sudo at -l 
+8	Sat Feb 21 09:33:00 2026 a root
+
+#if you are sudo you can add jobs manually
+echo "/usr/local/sbin/mgmt-access.py --off" | sudo at 3:45 sunday 
+
+#if you are sudo you can delete jobs with 
+atrm [job number]
 
 
 
