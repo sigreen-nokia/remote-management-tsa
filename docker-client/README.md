@@ -8,6 +8,7 @@
 ####################################################
 #The assumption is that you have already ran the python based server,  on the secure device you with to connect to.
 #and that it is trying to connect to your docker host on port 9000
+```
 git clone https://github.com/sigreen-nokia/remote-management-tsa.git
 cd remote-management-tsa
 sudo python3 mgmt-access.py --install-server
@@ -17,6 +18,7 @@ sudo python3 mgmt-access.py --install-server
       y
 sudo python3 mgmt-access.py --add-ops-user
 sudo python3 mgmt-access.py --on --timer-override 0
+```
 
 #################################################################################
 #install the docker client on the device you wish to use to connect to the server 
