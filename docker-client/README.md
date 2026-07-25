@@ -24,6 +24,7 @@ sudo python3 mgmt-access.py --on --timer-override 0
 #Open up TCP port 9000 inbound, src ip is the secure device you ran the server on 
 #use "docker compose" "or "docker-compose" whichever works
 ##installing the docker client 
+```
 git clone https://github.com/sigreen-nokia/remote-management-tsa.git
 cd remote-management-tsa/docker-client
 ##Edit the path to point to the server public sh key
@@ -59,5 +60,5 @@ curl -k https://127.0.0.1:9002/
 #Open up TCP ports 9001 9002 inbound, src ip's are any subnets containing devices which need to connect
 curl -k https://[fqdn or ip]:9002
 ssh -p 9001 support@[fqdn or ip]
-
+```
 
