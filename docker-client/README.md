@@ -1,7 +1,7 @@
 ##This is a docker version of the remote-management-server client. 
 ##You can use this instead of the python which requires its own Ubuntu ec2. 
 ##As a docker it's light, easy to remove and I'd expect it to run on most laptops, servers etc. 
-##At the time of writing I've tested this docker successfully on my synolody nas and my macOS laptop. 
+##At the time of writing I've tested this docker successfully on my Synology nas and my macOS laptop. 
 
 ####################################################
 #Server install on the server you wish to connect to
@@ -28,7 +28,7 @@ git clone https://github.com/sigreen-nokia/remote-management-tsa.git
 cd remote-management-tsa/docker-client
 ##Edit the path to point to the server public sh key
 cat << "EOF" > .env
-# Public-facing Synology ports.
+# Public-facing ports.
 SERVER_SSH_PORT=9000
 REMOTE_SSH_PORT=9001
 REMOTE_UI_PORT=9002
