@@ -3,9 +3,7 @@
 ##As a docker it's light, easy to remove and I'd expect it to run on most laptops, servers etc. 
 ##At the time of writing I've tested this docker successfully on my Synology nas and my macOS laptop. 
 
-####################################################
-#Server install on the server you wish to connect to
-####################################################
+###Server install on the server you wish to connect to
 #The assumption is that you have already ran the python based server,  on the secure device you with to connect to.
 #and that it is trying to connect to your docker host on port 9000
 ```
@@ -20,9 +18,7 @@ sudo python3 mgmt-access.py --add-ops-user
 sudo python3 mgmt-access.py --on --timer-override 0
 ```
 
-#################################################################################
-#install the docker client on the device you wish to use to connect to the server 
-#################################################################################
+###install the docker client on the device you wish to use to connect to the server 
 #Open up TCP port 9000 inbound, src ip is the secure device you ran the server on 
 #use "docker compose" "or "docker-compose" whichever works
 ##installing the docker client 
