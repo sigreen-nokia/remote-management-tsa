@@ -4,7 +4,7 @@
 ##At the time of writing I've tested this docker successfully on my Synology nas and my macOS laptop. 
 
 ###Server install on the server you wish to connect to
-#The assumption is that you have already ran the python based server,  on the secure device you with to connect to.
+#The assumption is that you have already ran the python based server, on the secure device you wish to connect to.
 #and that it is trying to connect to your docker host on port 9000
 ```
 git clone https://github.com/sigreen-nokia/remote-management-tsa.git
