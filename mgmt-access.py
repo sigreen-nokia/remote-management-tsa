@@ -124,6 +124,144 @@ _SHELL_METACHARS = ("|", "&", ";", "<", ">", "(", ")", "$", "`", "\\", '"', "'",
 def _needs_shell(cmd_str: str) -> bool:
     return any(tok in cmd_str for tok in _SHELL_METACHARS)
 
+def _format_time_remaining(delta):
+    """
+    Return a friendly duration such as:
+      2 hours, 14 minutes
+      32 minutes
+      less than 1 minute
+    """
+    total_seconds = max(0, int(delta.total_seconds()))
+
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    parts = []
+
+    if days:
+        parts.append(f"{days} day{'s' if days != 1 else ''}")
+
+    if hours:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+
+    if minutes:
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+
+    if not parts:
+        return "less than 1 minute"
+
+    return ", ".join(parts[:2])
+
+
+def get_remote_management_at_job(logger):
+    """
+    Find the earliest pending 'at' job that runs:
+
+        /usr/local/sbin/mgmt-access.py --off
+
+    Returns:
+        {
+            "job_id": "12",
+            "run_at": datetime.datetime(...),
+            "remaining": datetime.timedelta(...)
+        }
+
+    Returns None when no matching pending job exists.
+    """
+    if shutil.which("atq") is None or shutil.which("at") is None:
+        logger.debug("'at' or 'atq' is not installed.")
+        return None
+
+    try:
+        queue = subprocess.run(
+            ["atq"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+
+        if queue.returncode != 0:
+            logger.warning(
+                f"Could not query pending at jobs: "
+                f"{(queue.stderr or '').strip()}"
+            )
+            return None
+
+        matching_jobs = []
+
+        for line in (queue.stdout or "").splitlines():
+            parts = line.split()
+
+            # Typical atq output:
+            # 12 Thu Jul 30 23:45:00 2026 a root
+            if len(parts) < 6 or not parts[0].isdigit():
+                continue
+
+            job_id = parts[0]
+
+            # Inspect the job body so unrelated at jobs are ignored.
+            job = subprocess.run(
+                ["at", "-c", job_id],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            if job.returncode != 0:
+                logger.debug(
+                    f"Could not inspect at job {job_id}: "
+                    f"{(job.stderr or '').strip()}"
+                )
+                continue
+
+            job_body = job.stdout or ""
+
+            if (
+                "/usr/local/sbin/mgmt-access.py --off"
+                not in job_body
+            ):
+                continue
+
+            # The date occupies fields 2-6 after the job ID:
+            # Thu Jul 30 23:45:00 2026
+            date_text = " ".join(parts[1:6])
+
+            try:
+                run_at = datetime.datetime.strptime(
+                    date_text,
+                    "%a %b %d %H:%M:%S %Y",
+                )
+            except ValueError as e:
+                logger.debug(
+                    f"Could not parse time for at job {job_id}: "
+                    f"{date_text!r}: {e}"
+                )
+                continue
+
+            matching_jobs.append(
+                {
+                    "job_id": job_id,
+                    "run_at": run_at,
+                    "remaining": run_at - datetime.datetime.now(),
+                }
+            )
+
+        if not matching_jobs:
+            return None
+
+        # If --on has accidentally scheduled more than one cleanup,
+        # report the job which will disable access first.
+        return min(matching_jobs, key=lambda item: item["run_at"])
+
+    except Exception as e:
+        logger.warning(
+            f"Could not determine the remote-management timer: {e}"
+        )
+        return None
+
 def run(cmd, check=True, capture_output=False, logger=None):
     """
     Unified command runner.
@@ -983,25 +1121,70 @@ def show_status(logger):
 
         logger.debug(f"{service} found. Checking status…")
 
+
+        # In DEBUG mode, additionally show the full systemctl output.
         if logger.isEnabledFor(logging.DEBUG):
-            # Dump full status when in DEBUG
-            full = run(f"{sudo}systemctl status {service} --no-pager --full",
-                       check=False, capture_output=True, logger=logger)
-            logger.debug(f"Full systemctl status for {service}:\n{(full.stdout or '').strip()}")
+            full = run(
+                f"{sudo}systemctl status {service} --no-pager --full",
+                check=False,
+                capture_output=True,
+                logger=logger,
+            )
+            logger.debug(
+                f"Full systemctl status for {service}:\n"
+                f"{(full.stdout or '').strip()}"
+            )
+        
+        # Always obtain the concise service state, regardless of log level.
+        chk = run(
+            f"{sudo}systemctl is-active {service}",
+            check=False,
+            capture_output=True,
+            logger=logger,
+        )
+        state = (chk.stdout or "").strip()
+        
+        if state == "active":
+            logger.info(f"{service} is running ✅")
+        
+            # The automatic shutdown timer only exists on the server,
+            # where reverse-ssh.service is controlled by an 'at' job.
+            if role == "server":
+                timer_job = get_remote_management_at_job(logger)
+        
+                if timer_job:
+                    remaining = timer_job["remaining"]
+                    run_at = timer_job["run_at"]
+                    job_id = timer_job["job_id"]
+        
+                    if remaining.total_seconds() > 0:
+                        logger.info(
+                            "Remote management will be disabled in "
+                            f"{_format_time_remaining(remaining)}"
+                        )
+                        logger.info(
+                            "Scheduled disable time: "
+                            f"{run_at.strftime('%Y-%m-%d %H:%M:%S')} "
+                            f"(at job {job_id})"
+                        )
+                    else:
+                        logger.warning(
+                            f"The automatic disable timer has expired "
+                            f"(at job {job_id}); it may be about to run."
+                        )
+                else:
+                    logger.info(
+                        "No automatic disable timer is scheduled. "
+                        "Remote management will run until manually stopped."
+                    )
         else:
-            # Concise state only
-            chk = run(f"{sudo}systemctl is-active {service}",
-                      check=False, capture_output=True, logger=logger)
-            state = (chk.stdout or "").strip()
-            if state == "active":
-                logger.info(f"{service} is running ✅")
-            else:
-                logger.warning(f"{service} is NOT running (state={state or 'unknown'})")
+            logger.warning(
+                f"{service} is NOT running "
+                f"(state={state or 'unknown'})"
+            )
 
     except Exception as e:
         logger.error(f"Error checking {service}: {e}")
-
-
 
 
 def install_sw(logger):
