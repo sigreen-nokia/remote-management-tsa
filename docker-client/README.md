@@ -1,11 +1,13 @@
 ##This is a docker version of the remote-management-server client. 
-##You can use this instead of the python which requires its own Ubuntu ec2. 
-##As a docker it's light, easy to remove and I'd expect it to run on most laptops, servers etc. 
+##You can use this instead of the python based server, which requires its own Ubuntu ec2. 
+##As a docker it's light, easy to deploy/remove and I'd expect it to run on most laptops, servers etc. 
 ##At the time of writing I've tested this docker successfully on my Synology nas and my macOS laptop. 
+##One point of note is that the docker client does not include all of the security measures 
+##that the Python based client installs on its dedicated host. 
+##So Docker: flexible=yes, multi platform=yes. 
+##           Suitable for RSA deployments. Not without additional security in the network layer.
 
-###Server install on the server you wish to connect to
-#The assumption is that you have already ran the python based server, on the secure device you wish to connect to.
-#and that it is trying to connect to your docker host on port 9000
+###Python based server install, install on the server you wish to connect to
 ```
 git clone https://github.com/sigreen-nokia/remote-management-tsa.git
 cd remote-management-tsa
@@ -18,6 +20,7 @@ sudo python3 mgmt-access.py --add-ops-user
 sudo python3 mgmt-access.py --on --timer-override 0
 ```
 
+###Docker based client install.
 ###install the docker client on the device you wish to use to connect to the server 
 #Open up TCP port 9000 inbound, src ip is the secure device you ran the server on 
 #use "docker compose" "or "docker-compose" whichever works
