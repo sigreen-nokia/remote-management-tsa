@@ -1,9 +1,0 @@
-.env
-docker-compose.yaml
-*.bak-*
-keys/
-id_rsa
-id_ed25519
-*.key
-LABS.txt
-authorized_keys
