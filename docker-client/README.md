@@ -41,7 +41,20 @@ Each container has:
 
 All containers share the same Docker image layers.
 
-## Setup
+###Python based server install, install on the server you wish to connect to
+```
+git clone https://github.com/sigreen-nokia/remote-management-tsa.git
+cd remote-management-tsa
+sudo python3 mgmt-access.py --install-server
+      90000
+      [fqdn of the docker client]
+      y
+      y
+sudo python3 mgmt-access.py --add-ops-user
+sudo python3 mgmt-access.py --on --timer-override 0
+```
+
+###Docker based client install.
 
 Run:
 
