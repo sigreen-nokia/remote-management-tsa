@@ -1,27 +1,25 @@
+# Example only. Run ./setup.sh to generate docker-compose.yaml.
 services:
-  reverse-ssh-client:
+  lab1:
     build:
       context: .
       dockerfile: Dockerfile
     image: remote-management-client:latest
-    container_name: reverse-ssh-client
+    container_name: reverse-ssh-client-lab1
     restart: unless-stopped
-
     ports:
-      - "${SERVER_SSH_PORT:-9000}:9000"
-      - "${REMOTE_SSH_PORT:-9001}:9001"
-      - "${REMOTE_UI_PORT:-9002}:9002"
-
+      - "9000:9000"
+      - "9001:9001"
+      - "9002:9002"
     environment:
       OPS_USER: "${OPS_USER:-ops}"
-      REMOTE_SSH_PORT: "${REMOTE_SSH_PORT:-9001}"
-      REMOTE_UI_PORT: "${REMOTE_UI_PORT:-9002}"
+      LAB_NAME: "lab1"
+      REMOTE_SSH_PORT: "9001"
+      REMOTE_UI_PORT: "9002"
       MONITOR_INTERVAL: "${MONITOR_INTERVAL:-5}"
-
     volumes:
-      - "${CLIENT_PUBLIC_KEY_PATH}:/config/authorized_keys:ro"
-      - ssh-host-keys:/etc/ssh/host-keys
-
+      - "./authorized_keys:/config/authorized_keys:ro"
+      - lab1-ssh-host-keys:/etc/ssh/host-keys
     healthcheck:
       test: ["CMD-SHELL", "sshd -t && pgrep -x sshd >/dev/null"]
       interval: 30s
@@ -30,4 +28,4 @@ services:
       start_period: 10s
 
 volumes:
-  ssh-host-keys:
+  lab1-ssh-host-keys:

@@ -55,20 +55,15 @@ echo "--------------------------------------------------"
 echo "Deepfield Remote Management Docker Client"
 echo "SSH host key: ${ED25519_FINGERPRINT}"
 echo
-REMOTE_SSH_PORT="${REMOTE_SSH_PORT:-9001}"
-REMOTE_UI_PORT="${REMOTE_UI_PORT:-9002}"
-LAB_NAME="${LAB_NAME:-lab}"
-
 echo "Listening:"
-echo "  Lab                    : ${LAB_NAME}"
-echo "  Client SSH connection  : 0.0.0.0:9000"
-echo "  Reverse SSH forward    : 0.0.0.0:${REMOTE_SSH_PORT}"
-echo "  Reverse UI forward     : 0.0.0.0:${REMOTE_UI_PORT}"
-echo "  Login user             : ${OPS_USER}"
+echo "  Client SSH connection : 0.0.0.0:9000"
+echo "  Reverse SSH forward   : 0.0.0.0:9001"
+echo "  Reverse UI forward    : 0.0.0.0:9002"
+echo "  Login user            : ${OPS_USER}"
 echo "--------------------------------------------------"
 
-REMOTE_SSH_PORT="${REMOTE_SSH_PORT}" \
-REMOTE_UI_PORT="${REMOTE_UI_PORT}" \
+REMOTE_SSH_PORT="${REMOTE_SSH_PORT:-9001}" \
+REMOTE_UI_PORT="${REMOTE_UI_PORT:-9002}" \
 MONITOR_INTERVAL="${MONITOR_INTERVAL:-5}" \
     /usr/local/bin/tunnel-monitor.sh &
 

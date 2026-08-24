@@ -1,65 +1,162 @@
-##This is a docker version of the remote-management-server client. 
-##You can use this instead of the python based server, which requires its own Ubuntu ec2. 
-##As a docker it's light, easy to deploy/remove and I'd expect it to run on most laptops, servers etc. 
-##At the time of writing I've tested this docker successfully on my Synology nas and my macOS laptop. 
-##One point of note is that the docker client does not include all of the security measures 
-##that the Python based client installs on its dedicated host. 
-##So Docker: flexible=yes, multi platform=yes. 
-##           Suitable for RSA deployments. Not without additional security in the network layer.
+# Deepfield Remote Management Docker Client — Multi-Lab
 
-###Python based server install, install on the server you wish to connect to
-```
-git clone https://github.com/sigreen-nokia/remote-management-tsa.git
-cd remote-management-tsa
-sudo python3 mgmt-access.py --install-server
-      90000
-      [fqdn of the docker client]
-      y
-      y
-sudo python3 mgmt-access.py --add-ops-user
-sudo python3 mgmt-access.py --on --timer-override 0
+This is the Docker replacement for the Python-based remote-management client host.
+It can support **1 to 10 independent labs**, with one container per lab.
+
+As a docker it's light, easy to deploy/remove and I'd expect it to run on most laptops, servers etc.
+
+At the time of writing I've tested this docker successfully on my Synology nas and my macOS laptop.
+
+One important point of note is that the docker client does not include all of the security measures of the python installer. It relies on the network to secure its access. So the docker is intended for use only in lab environments with a more relaxed security model. 
+
+The python installer which deploys into its own operating system and environment and secures the Operating System specifically for TSA. It is intended for TSA secured production environments.  
+
+## Design
+
+Each lab gets a dedicated container and a dedicated three-port block:
+
+| Lab | Client connection | Reverse SSH | Reverse HTTPS |
+|---:|---:|---:|---:|
+| 1 | 9000 | 9001 | 9002 |
+| 2 | 9003 | 9004 | 9005 |
+| 3 | 9006 | 9007 | 9008 |
+| 4 | 9009 | 9010 | 9011 |
+| 5 | 9012 | 9013 | 9014 |
+| 6 | 9015 | 9016 | 9017 |
+| 7 | 9018 | 9019 | 9020 |
+| 8 | 9021 | 9022 | 9023 |
+| 9 | 9024 | 9025 | 9026 |
+| 10 | 9027 | 9028 | 9029 |
+
+For example, Lab 2's Python server uses `CLIENT_SSH_TUNNEL_PORT=9003`.
+It connects to Docker host port 9003 and requests reverse forwards on 9004 and 9005.
+
+Each container has:
+- its own sshd
+- the same shared `authorized_keys` file containing all configured lab public keys
+- its own persistent SSH host keys
+- its own logs
+- its own health state
+- its own restart lifecycle
+
+All containers share the same Docker image layers.
+
+## Setup
+
+Run:
+
+```bash
+./setup.sh
 ```
 
-###Docker based client install.
-###install the docker client on the device you wish to use to connect to the server 
-#Open up TCP port 9000 inbound, src ip is the secure device you ran the server on 
-#use "docker compose" "or "docker-compose" whichever works
-##installing the docker client 
-```
-git clone https://github.com/sigreen-nokia/remote-management-tsa.git
-cd remote-management-tsa/docker-client
-##Edit the path to point to the server public sh key
-cat << "EOF" > .env
-# Public-facing ports.
-SERVER_SSH_PORT=9000
-REMOTE_SSH_PORT=9001
-REMOTE_UI_PORT=9002
-## SSH account used by the EC2 client.
-OPS_USER=ops
-## Absolute path to the EC2 server PUBLIC key.
-## This is not the private key.
-CLIENT_PUBLIC_KEY_PATH=/var/services/homes/admin/remote-management-tsa/docker-client/id_rsa.pub
-EOF
-#
-## Build and start the container
+Choose between 1 and 10 labs. Then enter each lab server **public-key file**
+that should be trusted. Press ENTER when all keys have been entered.
+
+`setup.sh` combines the supplied keys into a local `authorized_keys` file,
+removes duplicate identical lines, and mounts that same file read-only into
+every lab container. This intentionally allows any configured lab key to
+authenticate to any lab container.
+
+`setup.sh` generates:
+- `.env`
+- `docker-compose.yaml`
+- `authorized_keys` — combined, de-duplicated public keys trusted by every lab container
+- `LABS.txt` — the persistent lab/port/key map and usage instructions
+
+Existing generated files are backed up first.
+
+## Build and start
+
+Synology / legacy Compose:
+
+```bash
 sudo docker-compose down --remove-orphans
 sudo docker-compose build --no-cache
 sudo docker-compose up -d
-#
-## Check status
 sudo docker-compose ps
-sudo docker-compose logs -f reverse-ssh-client
-#
-##After the EC2 tunnel connects, listeners should appear on ports `9001` and `9002`.
-sudo docker exec reverse-ssh-client ss -lntp
-#
-## Testing locally on the docker host
-ssh -v -p 9001 support@127.0.0.1
-curl -k https://127.0.0.1:9002/
-#
-##testing remotely using the public ip or fqdn
-#Open up TCP ports 9001 9002 inbound, src ip's are any subnets containing devices which need to connect
-curl -k https://[fqdn or ip]:9002
-ssh -p 9001 support@[fqdn or ip]
 ```
 
+Docker Compose v2:
+
+```bash
+sudo docker compose down --remove-orphans
+sudo docker compose build --no-cache
+sudo docker compose up -d
+sudo docker compose ps
+```
+
+## Logs
+
+Lab 1:
+
+```bash
+sudo docker-compose logs -f lab1
+```
+
+Lab 3:
+
+```bash
+sudo docker-compose logs -f lab3
+```
+
+## Check listeners
+
+```bash
+sudo docker exec reverse-ssh-client-lab1 ss -lntp
+```
+
+For Lab 1, after its Python server connects, expect ports 9000, 9001 and 9002.
+
+For Lab 2:
+
+```bash
+sudo docker exec reverse-ssh-client-lab2 ss -lntp
+```
+
+Expect container listeners on 9000, 9004 and 9005. Host port 9003 maps to that container's port 9000.
+
+## Python server configuration
+
+No code changes are needed.
+
+Use these `CLIENT_SSH_TUNNEL_PORT` values:
+
+```text
+Lab 1  = 9000
+Lab 2  = 9003
+Lab 3  = 9006
+Lab 4  = 9009
+Lab 5  = 9012
+Lab 6  = 9015
+Lab 7  = 9018
+Lab 8  = 9021
+Lab 9  = 9024
+Lab 10 = 9027
+```
+
+The existing Python server automatically derives its SSH and UI forwards as +1 and +2.
+
+## Testing
+
+Lab 1:
+
+```bash
+ssh -p 9001 support@127.0.0.1
+curl -k https://127.0.0.1:9002/
+```
+
+Lab 2:
+
+```bash
+ssh -p 9004 support@127.0.0.1
+curl -k https://127.0.0.1:9005/
+```
+
+## Network security
+
+For each active lab:
+- the first port in the block is the inbound SSH control connection from that lab server
+- the second port is remote SSH access to that lab
+- the third port is remote HTTPS access to that lab
+
+Restrict these at the Docker host/router/firewall according to your management network design.
