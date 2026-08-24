@@ -46,7 +46,7 @@ All containers share the same Docker image layers.
 git clone https://github.com/sigreen-nokia/remote-management-tsa.git
 cd remote-management-tsa
 sudo python3 mgmt-access.py --install-server
-      90000
+      9000      #lab2 9003 #lab3 9006 #lab4 9009 etc.
       [fqdn of the docker client]
       y
       y
