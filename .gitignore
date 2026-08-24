@@ -7,3 +7,4 @@ testing-in-vlab*.*
 *.swp
 *lab*.txt
 testing*.txt
+docker-client/backup 
